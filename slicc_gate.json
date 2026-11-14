@@ -1,0 +1,31 @@
+{
+ "_doc": "The policy of slicc_gate.py, read for every step SLICC's model wants to take. readonly_commands and browser_read_verbs run; stop_commands and stop_tools never run; browser navigation, other browser verbs and every other command are asked. Reads in SLICC's workspace run, writes to control_paths never happen, writes under scratch_paths run. Paths are fnmatch globs (* also matches /).",
+ "slicc": {
+  "stop_reason": "SLICC's cloud, devices, credentials, its own controls and memory stay off",
+  "stop_commands": [
+   "serve", "biscotto", "biscotti", "host", "ssh", "slicc", "oauth-token", "oauth-domain", "local-llm", "upskill",
+   "upgrade", "mount", "umount", "mcp", "plugin", "usb", "serial", "hid", "esptool", "screencapture", "computer", "v86",
+   "webhook", "crontask", "jshd", "secret", "sudo", "nuke", "session", "export-profile", "ipk", "npm", "npx", "ipx",
+   "memory", "gelatiere"
+  ],
+  "readonly_commands": [
+   "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "find", "jq", "echo", "printf", "pwd", "sort",
+   "uniq", "cut", "tr", "diff", "cmp", "comm", "nl", "seq", "basename", "dirname", "stat", "file", "xxd", "date",
+   "uptime", "ps", "which", "commands", "help", "man", "true", "test", "[", "md5sum", "sha256sum", "base64", "tree",
+   "column", "realpath", "readlink", "sleep", "meminfo", "cost", "id", "uname"
+  ],
+  "browser_commands": ["playwright-cli", "playwright", "puppeteer"],
+  "browser_read_verbs": ["snapshot", "screenshot", "tab-list", "list", "frames"],
+  "browser_navigate_verbs": ["open", "goto", "tab-new", "navigate"],
+  "internal_tools": [
+   "send_message", "list_scoops", "scoop_scoop", "feed_scoop", "drop_scoop", "list_sudo_requests", "sudo_request",
+   "lick_dismiss"
+  ],
+  "stop_tools": ["update_global_memory", "request_secret", "lick_confirm"],
+  "control_paths": [
+   "/etc/*", "/shared/CLAUDE.md", "/shared/MEMORY.md", "*/CLAUDE.md", "*/MEMORY.md", "/workspace/skills/*",
+   "/workspace/.mcp/*", "/workspace/.jshd/*"
+  ],
+  "scratch_paths": ["/tmp/", "/workspace/jobs/"]
+ }
+}
