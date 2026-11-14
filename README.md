@@ -98,7 +98,7 @@ decides it with the step in front of it. A permitted call is recorded and handed
 the model, which takes another step or reports. A Qwen job's gated step gets one short headless session
 (`CLAUDE_SLICC_APPROVE_MODEL`, sonnet) that makes that exact call, so the classifier judges it; blocked is stored and
 replayed like a refusal. `calls.jsonl` has `approved_by` (`gate` or `classifier`) on each step, `step_blocked` rows,
-and `approval` rows for Qwen. In `person` and `operator` mode an auto job's gated step still waits for
+and `approval` rows for Qwen. In `person`, `operator` and `external` mode an auto job's gated step still waits for
 `slicc_decide`: in `operator` mode the headless path would let the job's own model approve its steps with nothing
 checking. `CLAUDE_SLICC_AGENT_STEPS=0` brings the question back in classifier mode too.
 
