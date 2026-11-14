@@ -1,7 +1,8 @@
 # mcp-slicc
 
-Formerly `claude-slicc`. Claude Code driving [SLICC](https://www.sliccy.ai) (the `sliccy` npm package), a
-browser-and-shell agent, on your Mac, with the local `claude` CLI as SLICC's model. Two layers:
+Formerly `claude-slicc`. Claude Code driving [SLICC](https://github.com/ai-ecoverse/slicc) (the `sliccy` npm package,
+hosted at www.sliccy.ai), a browser-and-shell agent, on your Mac, with the local `claude` CLI as SLICC's model. Two
+layers:
 
 - **The operator**: the `slicc` MCP server. A Claude Code session starts a job, follows it, answers its questions or
   takes the steps itself, and reads the report.
@@ -12,8 +13,8 @@ browser-and-shell agent, on your Mac, with the local `claude` CLI as SLICC's mod
 No sandbox: SLICC runs as you, on your Mac. SLICC's shell, file tools and `node` work in its own virtual filesystem
 (checked with a canary file on 2026-11-09), but its Chrome is a real browser on your network.
 
-Python 3.9 or newer, standard library only. macOS: the scripts use Google Chrome, `lsof` and SLICC's macOS profile
-folder.
+Python 3.9 or newer, standard library only, and Node.js for SLICC itself. macOS: the scripts use Google Chrome,
+`lsof` and SLICC's macOS profile folder.
 
 ## Parts
 
