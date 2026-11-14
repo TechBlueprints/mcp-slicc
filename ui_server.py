@@ -22,6 +22,7 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # also under python3 -I
 import common as C
 
 ROOT = Path(os.environ.get("CLAUDE_SLICC_UI_ROOT",

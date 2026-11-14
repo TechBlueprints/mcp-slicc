@@ -11,6 +11,8 @@ pass by itself. What happens to a gated call is common.approval():
       printed, so Claude Code's permission system decides, with the step in front of it.
   operator: allow. The Claude session driving SLICC decides by itself.
   person: ask. Claude Code shows the person the instruction, the exact step or the note.
+  external (2026-11-14): ask, as person. That setting is for an operator CLI whose caller checked the approval;
+      nothing outside has checked a call that comes through Claude Code.
 
 In all three: reads, stops and reports are allowed; a manual step the gate passes by itself is allowed; a step the
 gate never allows is allowed through to the server, which refuses and records it; a slicc_decide for a question that
@@ -41,7 +43,7 @@ def _short(text: str, n: int = 600) -> str:
 def gated(mode: str, ask_text: str) -> None:
     """A gated call: the person is asked (person), nothing checks (operator), or the hook stays silent and Claude
     Code's own permission system decides (classifier)."""
-    if mode == "person":
+    if mode in ("person", "external"):
         emit("ask", ask_text)
     elif mode == "operator":
         emit("allow", OPERATOR)
@@ -66,8 +68,7 @@ def decide(event: dict) -> None:
             return
         ask_id = str(args.get("ask") or "")
         cur = C.current_job()
-        path = C.job_dir(cur["id"]) / "asks" / f"{ask_id}.json" if cur and C.ASK_ID.fullmatch(ask_id) else None
-        ask = C.read_json(path) if path else None
+        ask = C.find_ask(cur["id"], ask_id) if cur else None
         if not isinstance(ask, dict):
             emit("deny", f"{ask_id or 'this id'} is not a question of the running job.")
             return

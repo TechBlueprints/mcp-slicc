@@ -20,6 +20,9 @@ default: gate_hook.py stays silent for the call that carries the step, so in a s
 classifier judges it), the operator alone, or a person. In a manual job a permitted gated step runs at once; in an
 auto job the operator answers the job's question with slicc_decide. This server makes no model calls: results
 are screened by the endpoint, and this server only reads what the endpoint stored.
+
+The same functions (t_task ... t_report) are the operator CLI's, slicc_op.py (2026-11-14), for a caller that is not
+Claude Code, such as a broker that checked a person's approval itself (approval external).
 """
 from __future__ import annotations
 
@@ -32,6 +35,7 @@ from typing import Any
 import common as C
 
 PROTOCOL = "2025-06-18"
+WAIT_CAP_S = 45.0     # the longest slicc_wait; the operator CLI allows longer
 FINISHED = ("done", "refused", "lost")
 JOB_SHAPE = {"job": {"type": "string", "description": "the job id, job-…"}}
 TOOLS = [
@@ -142,8 +146,11 @@ def _calls(jid: str) -> dict:
 
 
 def _ask_view(a: dict) -> dict:
-    return {"id": a.get("id"), "wants": a.get("detail"), "gate": a.get("reason"), "tool": a.get("tool"),
+    view = {"id": a.get("id"), "wants": a.get("detail"), "gate": a.get("reason"), "tool": a.get("tool") or a.get("kind"),
             "answer_with": f"slicc_decide(ask={a.get('id')}, answer=allow|deny)", "asked_at": a.get("ts")}
+    if a.get("source") == "upstream":     # backend forward: a question the upstream agent asks, not this endpoint
+        view["from"] = "upstream"
+    return view
 
 
 def _result_text(s: dict) -> Any:
@@ -177,7 +184,7 @@ def _take_op_notes(jid: str) -> list:
         seen = int(seen_path.read_text().strip())
     except (OSError, ValueError):
         seen = 0
-    seen_path.write_text(str(len(notes)))
+    C.write_text(seen_path, str(len(notes)))
     return notes[seen:]
 
 
@@ -200,12 +207,22 @@ def t_task(a: dict) -> dict:
     launch = str(a.get("launch") or C.default_launch())
     if launch not in ("launcher", "attach"):
         raise Err("launch must be launcher or attach")
+    brain = C.backend()
+    if brain not in C.BACKENDS:
+        raise Err(f"backend {brain!r} is not one of {', '.join(C.BACKENDS)} (mcp-slicc config)")
+    if brain == "forward" and mode != "auto":
+        raise Err("a manual job needs backend local: with backend forward the upstream agent picks every step")
+    if brain == "forward" and not C.forward_url():
+        raise Err("backend forward needs forward_url (mcp-slicc config)")
+    if C.host_kind() not in C.HOST_KINDS:
+        raise Err(f"host {C.host_kind()!r} is not one of {', '.join(C.HOST_KINDS)} (mcp-slicc config)")
     jid = "job-" + secrets.token_hex(6)
     job = {"id": jid, "instruction": instruction, "model": str(a.get("model") or C.DEFAULT_MODEL),
            "model_explicit": bool(a.get("model")), "mode": mode,
-           "launch": launch, "budget": C.STEP_BUDGET, "status": "running", "started": C.now_iso()}
+           "launch": launch, "budget": C.STEP_BUDGET, "status": "running", "started": C.now_iso(),
+           "backend": brain, "approval": C.approval(), **({"ref": str(a["ref"])} if a.get("ref") else {})}
     for sub in ("asks", "decisions", "steps"):
-        (C.job_dir(jid) / sub).mkdir(parents=True, exist_ok=True)
+        C.make_dirs(C.job_dir(jid) / sub)
     C.write_json(C.HOME / "state" / "job.json", job)
     nxt = f"slicc_wait(job={jid})" if mode == "auto" else "slicc_bash / slicc_read_file / ... for the first step"
     if launch == "attach":
@@ -214,13 +231,21 @@ def t_task(a: dict) -> dict:
                 "do_first": "Send start_line as a message in the SLICC open in Chrome. The job runs in the chat that "
                             "carries it, from that message on. Until then SLICC is not waiting and steps stay queued.",
                 "next": nxt}
+    try:
+        slicc = C.start_slicc(job)
+    except C.HostError as e:      # host systemd: the unit did not start, so the job cannot run
+        C.write_json(C.job_dir(jid) / "report.json", {"ts": C.now_iso(), "text": f"SLICC did not start: {e}",
+                                                      "failed": True})
+        job.update(status="failed", ended=C.now_iso())
+        C.write_json(C.HOME / "state" / "job.json", job)
+        raise Err(f"{jid} failed: SLICC did not start: {e}") from None
     return {"job": jid, "status": "started", "mode": mode, "launch": launch, "model": job["model"],
-            "slicc": C.start_slicc(job), "next": nxt}
+            "slicc": slicc, "next": nxt}
 
 
 def t_wait(a: dict) -> dict:
     jid = str(a.get("job") or "")
-    seconds = min(float(a.get("seconds") or 40), 45.0)   # short holds: a desktop MCP call is cut near a minute
+    seconds = min(float(a.get("seconds") or 40), WAIT_CAP_S)   # short holds: a desktop MCP call is cut near a minute
     end = time.time() + seconds
     while True:
         job = _job_or_fail(jid)
@@ -254,17 +279,18 @@ def t_decide(a: dict) -> dict:
     if job is None:
         raise Err("no SLICC job is running")
     ask = str(a.get("ask") or "")
-    if not C.ASK_ID.fullmatch(ask) or ask not in {x.get("id") for x in C.open_asks(job["id"])}:
+    if not C.is_ask_id(ask) or ask not in {x.get("id") for x in C.open_asks(job["id"])}:
         raise Err(f"{ask} is not an open question of {job['id']} (it may have been answered, or SLICC's call ended)")
     answer = str(a.get("answer") or "")
     if answer not in ("allow", "deny"):
         raise Err("answer must be allow or deny")
-    question = C.read_json(C.job_dir(job["id"]) / "asks" / f"{ask}.json") or {}
+    question = C.find_ask(job["id"], ask) or {}
     if (answer == "allow" and C.approval() == "classifier" and question.get("source") != "operator-step"
             and str(a.get("wants") or "") != str(question.get("detail") or "")):
         raise Err(f"repeat the question's `wants` text in `wants`, word for word: {question.get('detail')}")
     C.write_json(C.job_dir(job["id"]) / "decisions" / f"{ask}.json",
-                 {"answer": answer, "ts": C.now_iso(), "by": C.approval()})
+                 {"answer": answer, "ts": C.now_iso(), "by": C.approval(),
+                  **({"ref": str(a["ref"])} if a.get("ref") else {})})
     return {"job": job["id"], "question": ask, "answer": answer, "next": f"slicc_wait(job={job['id']})"}
 
 
@@ -273,17 +299,20 @@ def t_tell(a: dict) -> dict:
     note = str(a.get("note") or "").strip()
     if not note:
         raise Err("the note is empty")
-    C.append_jsonl(C.job_dir(job["id"]) / "steer.jsonl", {"ts": C.now_iso(), "text": note})
+    C.append_jsonl(C.job_dir(job["id"]) / "steer.jsonl", {"ts": C.now_iso(), "text": note,
+                                                         **({"ref": str(a["ref"])} if a.get("ref") else {})})
     if job.get("mode", "auto") == "manual":
         return {"job": job["id"], "told": True, "note": "There is no model in a manual job. The note comes back "
                                                          "with the next step's result."}
+    if C.backend() == "forward":
+        return {"job": job["id"], "told": True, "note": "The upstream agent reads it from the job's notes."}
     return {"job": job["id"], "told": True, "note": "SLICC's model reads it with its next step."}
 
 
 def t_stop(a: dict) -> dict:
     job = _job_or_fail(a.get("job"))
-    C.job_dir(job["id"]).mkdir(parents=True, exist_ok=True)
-    (C.job_dir(job["id"]) / "stop").write_text(C.now_iso() + "\n")
+    C.make_dirs(C.job_dir(job["id"]))
+    C.write_text(C.job_dir(job["id"]) / "stop", C.now_iso() + "\n")
     for x in C.open_asks(job["id"]):   # the endpoint checks the stop flag first, so "stopped" wins over "deny"
         C.write_json(C.job_dir(job["id"]) / "decisions" / f"{x['id']}.json", {"answer": "deny", "ts": C.now_iso()})
     if job.get("status") == "running":
@@ -305,8 +334,12 @@ def t_status(_a: dict) -> dict:
     if not rec:
         return {"status": "no job yet"}
     out = {"job": rec["id"], "status": rec.get("status"), "mode": rec.get("mode", "auto"),
-           "launch": rec.get("launch", "launcher"), "approval": C.approval(), "instruction": rec.get("instruction"),
+           "launch": rec.get("launch", "launcher"), "approval": C.approval(), "backend": C.backend(),
+           "host": C.host_kind(), "instruction": rec.get("instruction"),
            "model": rec.get("model"), "started": rec.get("started"), "ended": rec.get("ended")}
+    state = C.slicc_state()
+    if state is not None:
+        out["slicc"] = state
     if rec.get("status") == "running":
         out["open_questions"] = [_ask_view(x) for x in C.open_asks(rec["id"])]
         if C.is_attached(rec):
@@ -340,9 +373,10 @@ def _run_step(tool: str, args: dict, purpose: str = "") -> dict:
     decision = v.get("decision")
     # An ask is a step the gate does not pass by itself. In classifier mode the hook left this very call to Claude
     # Code's permission system, so a call that got here was permitted and the step runs. In operator mode sending the
-    # step is the operator's decision. In person mode it waits for slicc_decide, where Claude Code asks the person.
+    # step is the operator's decision. In external mode the caller checked it before it called. In person mode it
+    # waits for slicc_decide, where Claude Code asks the person.
     mode = C.approval()
-    passed = decision == "ask" and mode in ("classifier", "operator")   # gated, and it runs
+    passed = decision == "ask" and mode in ("classifier", "operator", "external")   # gated, and it runs
     now = C.now_iso()
     step = {"id": "st-" + secrets.token_hex(6), "job": jid, "ts": now, "seq": time.time_ns(), "tool": tool,
             "args": args, "verdict": v, "reported": False, **({"purpose": purpose} if purpose else {})}

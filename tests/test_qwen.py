@@ -178,13 +178,17 @@ class Names(SparkBase):
     def test_the_code_version_covers_spark_turn(self):
         here = self.tmp / "code"
         here.mkdir()
-        for name in ("common.py", "claude_turn.py", "spark_turn.py", "step_mcp.py", "step_hook.py", "endpoint.py"):
+        for name in ("common.py", "claude_turn.py", "spark_turn.py", "step_mcp.py", "step_hook.py", "endpoint.py",
+                     "forward.py"):
             shutil.copy(HERE.parent / name, here / name)
         real = C.HERE
         self.addCleanup(setattr, C, "HERE", real)
         C.HERE = here
         before = C.code_version()
         (here / "spark_turn.py").write_text((here / "spark_turn.py").read_text() + "\n# changed\n")
+        self.assertNotEqual(C.code_version(), before)
+        before = C.code_version()
+        (here / "forward.py").write_text((here / "forward.py").read_text() + "\n# changed\n")
         self.assertNotEqual(C.code_version(), before)
 
 

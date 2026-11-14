@@ -16,6 +16,10 @@ A held call can lose its caller: SLICC gives up, or its page reloads. The handle
 the held call (2026-11-10). Then no step is handed to a caller that is gone, an open question is withdrawn (an ask
 must not outlive its call), and a step whose answer could not be written is marked lost, so the operator hears about
 it.
+
+That is backend local, the default. With backend forward (2026-11-14) every call goes instead to one upstream agent
+endpoint, which picks and gates the steps; this endpoint keeps the hang-up handling, the hard stops and the job
+record (_forward_call, forward.py).
 """
 from __future__ import annotations
 
@@ -28,10 +32,13 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # also under python3 -I
 import common as C
 import claude_turn as T
+import forward as F
 import spark_turn as S
 
 VERSION = C.code_version()   # the code this process started with; start_slicc.sh compares it with the files on disk
@@ -465,10 +472,25 @@ def _turn(job: dict, msgs: list, offered: list, cancel: threading.Event, request
     return _finish(job, "(endpoint) No allowed step came out of several tries. Report what you have.")
 
 
-def on_call(body: dict, cancel: Optional[threading.Event] = None) -> Optional[dict]:
+def on_call(body: dict, cancel: Optional[threading.Event] = None, raw: Optional[bytes] = None) -> Optional[dict]:
     """The answer to one SLICC call: {content, tool_calls}. None when `cancel` was set while the call was held (the
-    caller is gone, and nothing was handed over)."""
+    caller is gone, and nothing was handed over).
+
+    The brain seam (README "Backends"): the install's one backend answers every call. local is the claude CLI and
+    the Spark, below; forward sends the call to one upstream agent (_forward_call). `raw` is the call's body as SLICC
+    sent it, which forward passes on unchanged."""
     cancel = cancel or threading.Event()
+    brain = C.backend()
+    if brain == "forward":
+        return _forward_call(body, cancel, raw)
+    if brain != "local":
+        return _final(f"(endpoint) The backend setting {brain!r} is not one of {', '.join(C.BACKENDS)}, so nothing "
+                      "answers here. Fix it in mcp-slicc's config.")
+    return _local_call(body, cancel)
+
+
+def _local_call(body: dict, cancel: threading.Event) -> Optional[dict]:
+    """Backend local: the job's own model (auto) or the operator (manual) picks each step, as since 2026-11-09."""
     msgs, tools = body.get("messages") or [], body.get("tools")
     job = C.current_job() or start_chat_job(msgs, tools)
     if job is None or job_messages(job, msgs, tools) is None:
@@ -485,6 +507,117 @@ def on_call(body: dict, cancel: Optional[threading.Event] = None) -> Optional[di
         if job.get("mode") == "manual":
             return _manual_turn(job, mine, cancel)
         return _turn(job, mine, offered, cancel, body.get("model"))
+
+
+# ----------------------------------------------------------------------------------------- backend forward
+
+FORWARD_FAILED = "(endpoint) The upstream agent could not answer ({why}). The job ends here; nothing more was run."
+HARD_STOP = ("(endpoint) mcp-slicc's hard stop refused the upstream's step {tool}: {detail}: {reason}. Nothing was run, "
+             "and the job ends here.")
+
+
+def _forward_log(job: Optional[dict], rec: dict) -> None:
+    """A forwarded call's record: the running job's calls.jsonl, or side_calls.jsonl when no job runs."""
+    if job:
+        _log(job["id"], rec)
+    else:
+        C.append_jsonl(C.HOME / "side_calls.jsonl", {"ts": C.now_iso(), **rec})
+
+
+def hard_stop(tc: dict) -> dict:
+    """Backend forward: the change gate's verdict on one step the upstream handed over. Only `stop` counts here: the
+    upstream gated the step already, and this endpoint never asks. A step whose arguments are not a JSON object is a
+    stop too, since nothing could check it."""
+    fn = tc.get("function") or {}
+    try:
+        args = json.loads(fn.get("arguments") or "{}")
+    except ValueError:
+        args = None
+    if not isinstance(args, dict):
+        return {"decision": "stop", "reason": "its arguments are not a JSON object", "detail": str(fn.get("name"))}
+    return C.classify(str(fn.get("name") or ""), args)
+
+
+def _forward_call(body: dict, cancel: threading.Event, raw: Optional[bytes]) -> Optional[dict]:
+    """Backend forward (2026-11-14): this call goes, as it came, to the upstream agent (forward.py), which picks and
+    gates every step, and is held until the upstream answers. What this endpoint still does:
+
+      * the headers: the upstream's token, a call id, the running job's id, and whether this call is the job's own
+        conversation (job_messages)
+      * hang-ups: SLICC leaving, or the job being stopped, shuts the upstream call down; nothing is handed over
+      * the hard stops: a step the change gate never allows is not handed to SLICC, and the job ends failed. A step
+        the gate would ask about is the upstream's to decide
+      * the job record: in the job's own conversation the upstream's answer without a step is the job's report
+        (failed when the upstream sends `X-Slicc-Report: failed`), and an upstream that cannot answer ends the job
+        with a failure report
+    """
+    job = C.current_job()
+    msgs, tools = body.get("messages") or [], body.get("tools")
+    mine = job_messages(job, msgs, tools) if job else None
+    cid = "fwd-" + secrets.token_hex(6)
+    token = C.forward_token()
+    headers = {"Content-Type": "application/json", "X-Slicc-Call": cid}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    if job:
+        headers["X-Slicc-Job"] = job["id"]
+        headers["X-Slicc-Conversation"] = "job" if mine is not None else "other"
+    rec = {"event": "call" if mine is not None else "side_call", "backend": "forward", "call": cid}
+    if mine is not None:
+        _log(job["id"], {"event": "call_received", "messages": len(mine), "call": cid})
+    started = time.time()
+    r, why, status, rh = None, "", 0, {}
+    try:
+        if token is None:
+            raise F.UpstreamError("the forward token file cannot be read")
+        status, rh, out = F.request("POST", "/chat/completions",
+                                    raw if raw is not None else json.dumps(body, ensure_ascii=False).encode(),
+                                    headers, cancel, stopped=(lambda: C.is_stopped(job["id"])) if job else bool)
+        r = F.message_of(status, out)
+    except F.Cancelled as e:
+        ms = int((time.time() - started) * 1000)
+        if e.why == "dropped":
+            _forward_log(job, {"event": "call_dropped", "had_step": False, "backend": "forward", "call": cid,
+                               "upstream": "cancelled", "duration_ms": ms})
+            return None
+        if e.why == "stopped":
+            _forward_log(job, {**rec, "action": "stopped", "upstream": "cancelled", "duration_ms": ms})
+            return _final("The job was stopped. Stop here.")
+        why = f"it did not answer within {C.forward_timeout():g} s"
+    except F.UpstreamError as e:
+        why = str(e)
+    ms = int((time.time() - started) * 1000)
+    if r is None:
+        _forward_log(job, {**rec, "action": "error", "error": why[:300], "duration_ms": ms})
+        if mine is not None:
+            return _finish(job, FORWARD_FAILED.format(why=why), failed=True)
+        return _final(f"(endpoint) The upstream agent could not answer ({why})." if "bash" in C.tool_names(tools)
+                      else "")
+    calls = r["tool_calls"]
+    _forward_log(job, {**rec, "action": "step" if calls else "final", "status": status, "duration_ms": ms,
+                       "tools": [(tc.get("function") or {}).get("name") for tc in calls]})
+    if job and C.is_stopped(job["id"]):
+        return _final("The job was stopped. Stop here.")
+    refused = None
+    for tc in calls:
+        v = hard_stop(tc)
+        name = (tc.get("function") or {}).get("name")
+        if mine is not None:
+            _log(job["id"], {"event": "step", "tool": name, "call": cid,
+                             "decision": "stop" if v.get("decision") == "stop" else "upstream",
+                             "gate": v.get("decision"), "detail": str(v.get("detail", ""))[:300],
+                             "reason": str(v.get("reason", ""))[:200],
+                             **({} if v.get("decision") == "stop" else {"approved_by": "upstream"})})
+        if v.get("decision") == "stop" and refused is None:
+            refused = HARD_STOP.format(tool=name, detail=v.get("detail"), reason=v.get("reason"))
+    if refused:
+        if mine is not None:
+            return _finish(job, refused, failed=True)
+        _forward_log(job, {"event": "hard_stop", "call": cid, "text": refused[:300]})
+        return _final(refused)
+    if mine is not None and not calls:
+        return _finish(job, r["content"], failed=str(rh.get("x-slicc-report", "")).lower() == "failed")
+    return r
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -536,6 +669,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(404, {"error": {"message": "not found"}})
         if not self._authorized():
             return self._json(401, {"error": {"message": "unauthorized"}})
+        if C.backend() == "forward":                # the upstream's models, each with the code this endpoint runs
+            items = F.models() or [{"id": "claude-slicc", "object": "model", "owned_by": "forward"}]
+            return self._json(200, {"object": "list", "data": [{**m, "version": VERSION} for m in items]})
         ids = ("claude-slicc",) + C.MODEL_MENU     # claude-slicc: the job's own model; the rest name a model
         self._json(200, {"object": "list", "data": [
             {"id": i, "object": "model", "owned_by": getattr(C.parse_model(i), "backend", "claude"),
@@ -547,7 +683,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._json(401, {"error": {"message": "unauthorized"}})
         try:
-            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
+            raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            body = json.loads(raw or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("not an object")
         except ValueError:
             return self._json(400, {"error": {"message": "bad json"}})
         stream = bool(body.get("stream"))
@@ -557,7 +696,7 @@ class Handler(BaseHTTPRequestHandler):
 
         def work():
             try:
-                r = on_call(body, cancel)
+                r = on_call(body, cancel, raw)
                 if cancel.is_set() and r is not None:   # answered in the instant the caller left
                     undelivered(r)
                     r = None
@@ -635,9 +774,14 @@ def make_server(host: str = None, port: int = None) -> ThreadingHTTPServer:
 def main() -> None:
     C.HOME.mkdir(parents=True, exist_ok=True)
     C.token()
+    brain = C.backend()
+    if brain not in C.BACKENDS:
+        sys.exit(f"mcp-slicc endpoint: backend {brain!r} is not one of {', '.join(C.BACKENDS)} (mcp-slicc config)")
     srv = make_server()
+    how = (f"forward to {C.forward_url() or '(no forward_url)'}" if brain == "forward" else
+           f"local, billing: {C.BILLING}, budget: {C.STEP_BUDGET} steps")
     print(f"mcp-slicc endpoint {VERSION} on http://{C.HOST}:{srv.server_address[1]}/v1 (token: {C.HOME / 'token'}, "
-          f"billing: {C.BILLING}, budget: {C.STEP_BUDGET} steps)", file=sys.stderr, flush=True)
+          f"{how})", file=sys.stderr, flush=True)
     srv.serve_forever()
 
 

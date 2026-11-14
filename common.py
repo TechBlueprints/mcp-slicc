@@ -50,7 +50,7 @@ ASK_WAIT_S = int(os.environ.get("CLAUDE_SLICC_ASK_WAIT", "1800"))
 STEP_WAIT_S = int(os.environ.get("CLAUDE_SLICC_STEP_WAIT", "30"))         # a manual step tool waits this long for SLICC
 MANUAL_IDLE_S = int(os.environ.get("CLAUDE_SLICC_MANUAL_IDLE", "3600"))   # a manual job with no operator step ends
 APPROVAL = os.environ.get("CLAUDE_SLICC_APPROVAL", "")   # "" = config.json's "approval", and "classifier" without one
-APPROVAL_MODES = ("classifier", "operator", "person")
+APPROVAL_MODES = ("classifier", "operator", "person", "external")
 # The Spark: Qwen on a local OpenAI-compatible model server, for the qwen-3.8-* routes (spark_turn.py, 2026-11-10).
 # "" = config.json's "spark_url", "spark_key", "spark_model", and the defaults in spark_url() and the rest without one.
 SPARK_URL = os.environ.get("CLAUDE_SLICC_SPARK_URL", "")
@@ -68,6 +68,23 @@ AGENT_STEPS = os.environ.get("CLAUDE_SLICC_AGENT_STEPS", "1") != "0"
 APPROVE_MODEL = os.environ.get("CLAUDE_SLICC_APPROVE_MODEL", "sonnet")
 # haiku (default): results are screened through the claude CLI. qwen: on the Spark at medium effort, for free.
 SCREEN_MODEL = os.environ.get("CLAUDE_SLICC_SCREEN_MODEL", "haiku")
+# One backend per install (2026-11-14, README "Backends"), three seams. "" = config.json's key, then the default.
+#   brain:    local (the claude CLI and the Spark) or forward (every SLICC call goes to one upstream agent endpoint)
+#   operator: the MCP tools or the operator CLI (slicc_op.py), with the approval setting above
+#   host:     macos (start_slicc.sh and stop_slicc.sh) or systemd (named units)
+BACKEND = os.environ.get("CLAUDE_SLICC_BACKEND", "")
+BACKENDS = ("local", "forward")
+FORWARD_URL = os.environ.get("CLAUDE_SLICC_FORWARD_URL", "")                # unix:/path/to.sock, or http(s)://…/v1
+FORWARD_TOKEN = os.environ.get("CLAUDE_SLICC_FORWARD_TOKEN", "")            # the token itself (config takes a file)
+FORWARD_TOKEN_FILE = os.environ.get("CLAUDE_SLICC_FORWARD_TOKEN_FILE", "")
+FORWARD_TIMEOUT = os.environ.get("CLAUDE_SLICC_FORWARD_TIMEOUT", "")        # seconds one call is held; 3600
+FORWARD_ASKS = os.environ.get("CLAUDE_SLICC_FORWARD_ASKS", "")              # the upstream's question folders
+HOST_KIND = os.environ.get("CLAUDE_SLICC_HOST_KIND", "")                    # CLAUDE_SLICC_HOST is the bind address
+HOST_KINDS = ("macos", "systemd")
+SYSTEMD_UNITS = os.environ.get("CLAUDE_SLICC_SYSTEMD_UNITS", "")            # comma-separated
+SYSTEMCTL = os.environ.get("CLAUDE_SLICC_SYSTEMCTL", "")
+STATE_MODE = os.environ.get("CLAUDE_SLICC_STATE_MODE", "")                  # octal, e.g. 0644; "" = 0600 as before
+STATE_OWNER = os.environ.get("CLAUDE_SLICC_STATE_OWNER", "")                # a user name; only used when run as root
 
 
 def config() -> dict:
@@ -113,10 +130,145 @@ def approval() -> str:
     operator: the hook allows every slicc call; the Claude session driving SLICC decides, and nothing else checks.
     person: the hook makes Claude Code ask the person, with the exact step shown.
 
-    The gate's never-allowed steps are refused in all three. Set with CLAUDE_SLICC_APPROVAL, or "approval" in
+    external (2026-11-14): the caller checked the approval before it called, for example a broker that runs the
+        operator CLI only for a job, a note or an allow a person approved. The operator functions run what they are
+        given; the hook, which only Claude Code runs, asks a person, because nothing outside checked such a call.
+
+    The gate's never-allowed steps are refused in all of them. Set with CLAUDE_SLICC_APPROVAL, or "approval" in
     ~/.claude-slicc/config.json; a value that is none of these falls to person, the strictest."""
     mode = APPROVAL or str((read_json(HOME / "config.json") or {}).get("approval") or "classifier")
     return mode if mode in APPROVAL_MODES else "person"
+
+
+def backend() -> str:
+    """The brain (README "Backends"): local (default) or forward. Any other value is returned as it is: the endpoint
+    answers no call with it and slicc_task refuses to start, rather than guess which brain was meant."""
+    return _setting(BACKEND, "backend", "local")
+
+
+def forward_url() -> str:
+    """The upstream agent endpoint of backend forward: unix:/path/to.sock (calls go to /v1/... on the socket), or an
+    http(s) base URL that ends in /v1, as an OpenAI client takes it."""
+    return _setting(FORWARD_URL, "forward_url", "")
+
+
+def forward_token() -> Optional[str]:
+    """The token sent upstream as `Authorization: Bearer …`: CLAUDE_SLICC_FORWARD_TOKEN, else the file named by
+    CLAUDE_SLICC_FORWARD_TOKEN_FILE or config.json's "forward_token_file" (never the token itself in config.json,
+    which the upstream may be able to read). "" when none is set; None when the file is set but cannot be read."""
+    if FORWARD_TOKEN:
+        return FORWARD_TOKEN
+    path = FORWARD_TOKEN_FILE or str(config().get("forward_token_file") or "")
+    if not path:
+        return ""
+    try:
+        return Path(path).read_text().strip()
+    except OSError:
+        return None
+
+
+def forward_timeout() -> float:
+    try:
+        return float(_setting(FORWARD_TIMEOUT, "forward_timeout", "3600"))
+    except ValueError:
+        return 3600.0
+
+
+def _list_setting(value: str, key: str, sep: str) -> list:
+    """An environment value split on `sep` when it is set, else config.json's key as a list or one string."""
+    if value:
+        return [v.strip() for v in value.split(sep) if v.strip()]
+    v = config().get(key)
+    if isinstance(v, str):
+        v = [v]
+    return [str(x).strip() for x in v if str(x).strip()] if isinstance(v, list) else []
+
+
+def forward_asks() -> list:
+    """Folders where the upstream of backend forward puts the questions it wants a person to answer, one file
+    <id>.json each. "{job}" in a folder is the job id. Read by wait and status; decide writes the answer into this
+    job's decisions/, which the upstream reads (README "The forward backend")."""
+    return _list_setting(FORWARD_ASKS, "forward_asks", os.pathsep)
+
+
+def host_kind() -> str:
+    """The host: macos (default: start_slicc.sh and stop_slicc.sh) or systemd (systemd_units)."""
+    return _setting(HOST_KIND, "host", "macos")
+
+
+def systemd_units() -> list:
+    """Host systemd: the units restarted for each launcher job (a fresh SLICC) and stopped by slicc_stop."""
+    return _list_setting(SYSTEMD_UNITS, "systemd_units", ",")
+
+
+def systemctl() -> list:
+    v = SYSTEMCTL or config().get("systemctl") or "systemctl"
+    return [str(x) for x in v] if isinstance(v, list) else shlex.split(str(v))
+
+
+def state_mode() -> Optional[int]:
+    """The mode of the files written under CLAUDE_SLICC_HOME, when set (for an upstream that reads the job record as
+    another user). None: as before, JSON records 0600 and the rest by the process's umask. A value that is not
+    octal is 0600."""
+    v = STATE_MODE or config().get("state_mode")
+    if v in (None, ""):
+        return None
+    if isinstance(v, int):
+        return v & 0o777
+    try:
+        return int(str(v), 8) & 0o777
+    except ValueError:
+        return 0o600
+
+
+def state_owner() -> str:
+    """A user that owns what this process writes under CLAUDE_SLICC_HOME, when this process runs as root: an operator
+    CLI run by a root broker writes job folders that the endpoint, running as that user, must write into too."""
+    return str(STATE_OWNER or config().get("state_owner") or "")
+
+
+_owner_ids_cache: dict = {}
+
+
+def _owner_ids(name: str) -> tuple:
+    if name not in _owner_ids_cache:
+        import pwd
+        pw = pwd.getpwnam(name)
+        _owner_ids_cache[name] = (pw.pw_uid, pw.pw_gid)
+    return _owner_ids_cache[name]
+
+
+def own(path, is_dir: bool = False) -> None:
+    """The state settings for one file or folder this process just made: state_mode (a folder also gets x where it
+    has r) and state_owner. Nothing changes when neither is set."""
+    mode = state_mode()
+    if mode is not None:
+        os.chmod(path, mode | ((mode & 0o444) >> 2) if is_dir else mode)
+    owner = state_owner()
+    if owner and os.geteuid() == 0:
+        os.chown(path, *_owner_ids(owner))
+
+
+def make_dirs(path) -> None:
+    """mkdir -p, with own() for each folder it made."""
+    p = Path(path)
+    missing = []
+    q = p
+    while not q.exists() and q != q.parent:
+        missing.append(q)
+        q = q.parent
+    p.mkdir(parents=True, exist_ok=True)
+    for d in reversed(missing):
+        own(d, is_dir=True)
+
+
+def write_text(path, text: str) -> None:
+    p = Path(path)
+    make_dirs(p.parent)
+    new = not p.exists()
+    p.write_text(text)
+    if new:
+        own(p)
 
 AUTO_PROMPT = "Start the job described under The job in your instructions."   # SLICC's launch prompt
 ENVELOPE = re.compile(r"^\[[^\]\n]{1,80}\] [^:\n]{1,80}: ")   # SLICC prefixes user messages with "[time] sender: "
@@ -224,7 +376,8 @@ def code_version() -> str:
     """A short hash of the endpoint's code on disk. The endpoint reports the hash it started with (/v1/models), and
     start_slicc.sh restarts an endpoint whose hash differs, so a fix on disk is running by the next job."""
     h = hashlib.sha256()
-    for name in ("common.py", "claude_turn.py", "spark_turn.py", "step_mcp.py", "step_hook.py", "endpoint.py"):
+    for name in ("common.py", "claude_turn.py", "spark_turn.py", "step_mcp.py", "step_hook.py", "endpoint.py",
+                 "forward.py"):
         h.update((HERE / name).read_bytes())
     return h.hexdigest()[:12]
 
@@ -241,20 +394,25 @@ def read_json(path, default=None):
         return default
 
 
-def write_json(path, obj, mode: int = 0o600) -> None:
+def write_json(path, obj, mode: Optional[int] = None) -> None:
+    """Written whole and then moved into place, 0600 unless state_mode says otherwise."""
     p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    make_dirs(p.parent)
     tmp = p.with_name(p.name + ".tmp")
     tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=1))
-    os.chmod(tmp, mode)
+    own(tmp)
+    os.chmod(tmp, mode if mode is not None else (state_mode() if state_mode() is not None else 0o600))
     os.replace(tmp, p)
 
 
 def append_jsonl(path, obj) -> None:
     p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
+    make_dirs(p.parent)
+    new = not p.exists()
     with open(p, "a") as f:
         f.write(json.dumps(obj, ensure_ascii=False, default=str) + "\n")
+    if new:
+        own(p)
 
 
 def read_jsonl(path) -> list:
@@ -291,6 +449,8 @@ def is_stopped(jid: str) -> bool:
 
 
 def open_asks(jid: str) -> list:
+    """The job's questions that have no answer yet: the endpoint's own, and with backend forward the upstream's
+    (upstream_asks)."""
     out = []
     for p in sorted((job_dir(jid) / "asks").glob("ma-*.json")):
         a = read_json(p)
@@ -299,7 +459,43 @@ def open_asks(jid: str) -> list:
         if (job_dir(jid) / "decisions" / f"{a['id']}.json").exists():
             continue
         out.append(a)
+    if backend() == "forward":
+        out += [a for a in upstream_asks(jid) if not (job_dir(jid) / "decisions" / f"{a['id']}.json").exists()]
     return sorted(out, key=lambda a: a.get("ts", ""))
+
+
+UPSTREAM_ASK_ID = re.compile(r"[a-z]{2}-[0-9a-f]{12}")
+
+
+def upstream_asks(jid: str) -> list:
+    """Backend forward: the questions the upstream put in its forward_asks folders for this job, while it runs. A
+    question is one file <id>.json with at least {id, job}; its id is two letters, a dash and 12 hex digits, the
+    same as the file name, and its job is this job. Removing the file withdraws the question."""
+    rec = job_record()
+    if not rec or rec.get("id") != jid or rec.get("status") != "running":
+        return []
+    out = []
+    for folder in forward_asks():
+        for p in sorted(Path(folder.replace("{job}", jid)).glob("*.json")):
+            a = read_json(p)
+            if (isinstance(a, dict) and UPSTREAM_ASK_ID.fullmatch(str(a.get("id", ""))) and p.stem == a["id"]
+                    and a.get("job") == jid):
+                out.append({**a, "source": "upstream"})
+    return out
+
+
+def is_ask_id(aid: str) -> bool:
+    return bool(ASK_ID.fullmatch(aid or "") or (backend() == "forward" and UPSTREAM_ASK_ID.fullmatch(aid or "")))
+
+
+def find_ask(jid: str, aid: str) -> Optional[dict]:
+    """One question of the job, the endpoint's own or the upstream's, answered or not; None when there is none."""
+    if not is_ask_id(aid):
+        return None
+    a = read_json(job_dir(jid) / "asks" / f"{aid}.json")
+    if isinstance(a, dict) and a.get("id") == aid:
+        return a
+    return next((x for x in upstream_asks(jid) if x["id"] == aid), None)
 
 
 def read_steps(jid: str) -> list:
@@ -522,15 +718,52 @@ def _run_cmd(template: str, job: dict, done: str) -> str:
     return done
 
 
+class HostError(Exception):
+    """The host could not start SLICC for a job, or its setting is not known."""
+
+
+def _systemctl(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(systemctl() + list(args), capture_output=True, text=True, timeout=90,
+                          stdin=subprocess.DEVNULL)
+
+
+def _units() -> list:
+    units = systemd_units()
+    if not units:
+        raise HostError("host systemd needs systemd_units (mcp-slicc config)")
+    return units
+
+
+def _host() -> str:
+    kind = host_kind()
+    if kind not in HOST_KINDS:
+        raise HostError(f"host {kind!r} is not one of {', '.join(HOST_KINDS)} (mcp-slicc config)")
+    return kind
+
+
 def start_slicc(job: dict) -> str:
+    """A launcher job's SLICC. macos: start_slicc.sh, in the background. systemd: run/slicc.job and run/slicc.env
+    (SLICC_JOB, SLICC_PROMPT, for a unit's EnvironmentFile=) are written, then `systemctl restart` of the units, so
+    SLICC starts fresh; HostError when it fails."""
+    if _host() == "systemd":
+        units = _units()
+        write_text(HOME / "run" / "slicc.job", job["id"] + "\n")
+        write_text(HOME / "run" / "slicc.env", f'SLICC_JOB={job["id"]}\nSLICC_PROMPT="{AUTO_PROMPT}"\n')
+        try:
+            r = _systemctl("restart", *units)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise HostError(f"systemctl could not run ({type(e).__name__}: {e})") from None
+        if r.returncode:
+            raise HostError(f"systemctl restart {' '.join(units)} failed: {(r.stderr or r.stdout).strip()[:300]}")
+        return "started"
     if not START_CMD:
         return "not started: CLAUDE_SLICC_START_CMD is not set, so SLICC must be started by hand"
     return _run_cmd(START_CMD, job, "started")
 
 
 def start_attached(job: dict) -> str:
-    """An attached job: nothing of SLICC's is started. The endpoint is brought up, at the code on disk."""
-    if ATTACH_CMD:
+    """An attached job: nothing of SLICC's is started. The endpoint is brought up, at the code on disk (macos)."""
+    if _host() == "macos" and ATTACH_CMD:
         _run_cmd(ATTACH_CMD, job, "")
     return "not started: this job joins the SLICC that is already running in your Chrome"
 
@@ -538,9 +771,28 @@ def start_attached(job: dict) -> str:
 def stop_slicc(job: dict) -> str:
     if is_attached(job):
         return "left running: this job was attached to the SLICC in your Chrome, which mcp-slicc never stops"
+    if host_kind() == "systemd":
+        units = systemd_units()
+        if not units:
+            return "not stopped: host systemd has no systemd_units"
+        try:
+            r = _systemctl("stop", *units)
+        except (OSError, subprocess.SubprocessError) as e:
+            return f"stop failed: systemctl could not run ({type(e).__name__})"
+        return "stopped" if r.returncode == 0 else f"stop failed: {(r.stderr or r.stdout).strip()[:300]}"
     if not STOP_CMD:
         return "not stopped: CLAUDE_SLICC_STOP_CMD is not set"
     return _run_cmd(STOP_CMD, job, "stopped")
+
+
+def slicc_state() -> Optional[str]:
+    """Host systemd: `systemctl is-active` of the first unit (active, inactive, failed ...). None on macos."""
+    if host_kind() != "systemd" or not systemd_units():
+        return None
+    try:
+        return _systemctl("is-active", systemd_units()[0]).stdout.strip() or "unknown"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
 
 
 if __name__ == "__main__":
