@@ -150,7 +150,11 @@ def render(messages: list, screen: Callable[[str], str]) -> tuple:
     for m in messages:
         role = m.get("role")
         if role == "user":
-            lines.append("PERSON/OPERATOR: " + _clip(C.job_prompt(C.text_of(m.get("content"))), MAX_TEXT))
+            said = C.text_of(m.get("content"))
+            if C.sent_by_person(said):
+                lines.append("PERSON/OPERATOR: " + _clip(C.job_prompt(said), MAX_TEXT))
+            else:       # a discovery, a lick, a scheduled task: SLICC wrote it, and a web page may have worded it
+                lines.append("SLICC EVENT: " + C.EVENT_LABEL + _clip(said.strip(), MAX_TEXT))
         elif role == "assistant":
             calls = m.get("tool_calls") or []
             for c in calls:

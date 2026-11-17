@@ -186,7 +186,9 @@ def slicc_messages(jid: str, msgs: list, screen: Callable[[str], str]) -> list:
     for m in msgs:
         role = m.get("role")
         if role == "user":
-            out.append({"role": "user", "content": T._clip(C.job_prompt(C.text_of(m.get("content"))), T.MAX_TEXT)})
+            said = C.text_of(m.get("content"))
+            out.append({"role": "user", "content": T._clip(C.job_prompt(said), T.MAX_TEXT) if C.sent_by_person(said)
+                        else C.EVENT_LABEL + T._clip(said.strip(), T.MAX_TEXT)})
         elif role == "assistant":
             calls = [{"id": str(c.get("id") or ""), "type": "function",
                       "function": {"name": str((c.get("function") or {}).get("name") or ""),

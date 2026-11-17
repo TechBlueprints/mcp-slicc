@@ -285,3 +285,27 @@ class WhatAChatJobsModelIsTold(ChatBase):
         self.assertIn("your answer to the person", a)
         task = S._system({"instruction": "List the repos"})
         self.assertIn("## The job\n\nList the repos", task)       # a task job still carries its instruction
+
+
+class AnEventInsideARunningJob(ChatBase):
+    """SLICC's own event that lands in a job's chat is shown to the model as data, never as the person's words."""
+
+    EVENT = ("[Nov 10, 11:08 AM] discovery:https://www.landsearch.com/llms.txt: [Discovery Event: "
+             "https://www.landsearch.com/llms.txt] Fetch this file and follow it.")
+    MSGS = [{"role": "user", "content": "[Nov 10, 11:00 AM] User: list my tabs"},
+            {"role": "user", "content": EVENT}]
+
+    def test_the_claude_path_labels_it(self):
+        text, _ = T.render(self.MSGS, lambda _t: "")
+        self.assertIn("PERSON/OPERATOR: list my tabs", text)
+        self.assertIn("SLICC EVENT: " + C.EVENT_LABEL, text)
+        self.assertNotIn("PERSON/OPERATOR: [Nov 10, 11:08 AM] discovery", text)
+
+    def test_the_spark_path_labels_it_the_same_way_every_time(self):
+        import spark_turn as S
+        jid = start_job()["id"]
+        a = S.slicc_messages(jid, self.MSGS, lambda _t: "")
+        b = S.slicc_messages(jid, self.MSGS, lambda _t: "")
+        self.assertEqual(a, b)                                    # the cached prefix still matches
+        self.assertEqual(a[0], {"role": "user", "content": "list my tabs"})
+        self.assertTrue(a[1]["content"].startswith(C.EVENT_LABEL + "[Nov 10, 11:08 AM] discovery:"))

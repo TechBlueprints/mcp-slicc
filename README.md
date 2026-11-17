@@ -37,7 +37,7 @@ Python 3.9 or newer, standard library only, and Node.js for SLICC itself. macOS:
 | `job-brief.md` / `chat-brief.md` | what a job's model is told: a job handed over by the operator, or a chat typed in SLICC |
 | `start_slicc.sh` / `stop_slicc.sh` | start SLICC for one job (own Chrome profile, wiped; `--prompt`; local UI) and stop it and its Chrome. They touch only what mcp-slicc started. `servers` starts or stops just the endpoint and the UI |
 | `ui_server.py` | serves SLICC's bundled UI on `127.0.0.1:5711`, seeded to use the endpoint, telemetry off |
-| `tests/` | 161 tests with a stand-in `claude` (`fake_claude.py`), a fake Spark (`test_qwen.py`), a fake upstream agent (`fake_upstream.py`), a stand-in `systemctl` and temporary folders: no login, no spend, no SLICC, no Spark |
+| `tests/` | 163 tests with a stand-in `claude` (`fake_claude.py`), a fake Spark (`test_qwen.py`), a fake upstream agent (`fake_upstream.py`), a stand-in `systemctl` and temporary folders: no login, no spend, no SLICC, no Spark |
 
 Run the tests from the repo: `python3 -m unittest discover -s tests -t tests` (Python 3.9 and 3.12 checked).
 
@@ -129,7 +129,9 @@ what was changed the same day:
 - **Only the person's messages start a job.** SLICC puts its own events in the chat as user messages
   (`[time] discovery:https://site/llms.txt: ...`, licks, scheduled tasks). Two discovery events had each started a job
   that fetched the site's `llms.txt`. Now a message starts a job only when its sender is `User`
-  (`common.sent_by_person`); an event gets an empty answer and nothing runs.
+  (`common.sent_by_person`); an event gets an empty answer and nothing runs. An event that lands in a chat while a
+  job is already running is passed to the model marked as SLICC's own (`common.EVENT_LABEL`: data, not a request),
+  never as the person's words (2026-11-17).
 - **A chat job has its own brief,** [chat-brief.md](chat-brief.md): answer the person directly, work in tabs you
   opened, close them when done. With the job brief, the answers read as reports to an operator.
 - **Every job is told how SLICC's shell drives the browser** (`common.TOOL_GUIDE`, SLICC's own usage lines). Without it
