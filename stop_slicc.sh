@@ -10,6 +10,13 @@
 #     endpoint's port whose command runs endpoint.py, and the one on the UI's port running ui_server.py.
 #     `start_slicc.sh servers` starts them again
 # A SLICC you run yourself (npx sliccy, its default profile in ~/Library/Application Support/Slicc) is never matched.
+#
+# SLICC seven (2026-11-18, README "SLICC seven"), whatever "slicc" is set to now, so a job started on the other one
+# is stopped too: the run is aborted (`slicc abort` over the CDP URL in run/seven.cdp), then the `slicc prompt`,
+# owner_watch.py and `slicc` processes this install started, by the pids in run/ and only when their command is the
+# one start_seven.sh ran. SIGTERM makes `slicc` say bye to seven and close the Chrome it launched; a Chrome still on
+# mcp-slicc's own seven profile folder after that is ended. A seven you run yourself (another profile, your own Chrome)
+# is never matched.
 set -u
 HOME_DIR="${CLAUDE_SLICC_HOME:-$HOME/.claude-slicc}"
 NODE_CLI="${CLAUDE_SLICC_NODE_CLI:-$HOME_DIR/slicc/node_modules/sliccy/dist/node-server/index.js}"
@@ -56,6 +63,39 @@ if [ "$STOPPED" = "1" ]; then
   fi
 fi
 pkill -f "user-data-dir=$PROFILE" 2>/dev/null
+
+# SLICC seven.
+SEVEN_BIN="${CLAUDE_SLICC_SEVEN_BIN:-$HOME_DIR/slicc7/node_modules/.bin/slicc}"
+SEVEN_PROFILE="${CLAUDE_SLICC_SEVEN_PROFILE:-mcp-slicc}"
+R="$HOME_DIR/run"
+ours() {   # ours <pidfile> <text the command must contain>: the pid, when it runs that command
+  local p
+  p="$(cat "$1" 2>/dev/null)"
+  [ -n "$p" ] && ps -o command= -p "$p" 2>/dev/null | grep -qF -- "$2" && echo "$p"
+}
+SEVEN_PID="$(ours "$R/seven.pid" "--profile $SEVEN_PROFILE ")"
+if [ -n "$SEVEN_PID" ] && [ -s "$R/seven.cdp" ]; then
+  SLICC_NO_TELEMETRY=1 SLICC_NO_UPDATE_CHECK=1 "$SEVEN_BIN" abort --cdp "$(cat "$R/seven.cdp")" >/dev/null 2>&1 &
+  A=$!
+  for _ in $(seq 1 50); do kill -0 "$A" 2>/dev/null || break; sleep 0.2; done
+  kill "$A" 2>/dev/null
+fi
+for spec in "seven-prompt.pid:prompt --cdp" "owner_watch.pid:owner_watch.py"; do
+  p="$(ours "$R/${spec%%:*}" "${spec#*:}")"
+  [ -n "$p" ] && kill "$p" 2>/dev/null
+done
+if [ -n "$SEVEN_PID" ]; then
+  kill "$SEVEN_PID" 2>/dev/null
+  for _ in $(seq 1 50); do kill -0 "$SEVEN_PID" 2>/dev/null || break; sleep 0.2; done
+fi
+SEVEN_DIR="$(cat "$R/seven.profile" 2>/dev/null)"
+case "$SEVEN_DIR" in
+  */seven-profiles/"$SEVEN_PROFILE")
+    for p in $(pgrep -f "seven-profiles/$SEVEN_PROFILE" 2>/dev/null); do   # exactly this folder, not a longer name
+      ps -o command= -p "$p" 2>/dev/null | grep -qF -- "--user-data-dir=$SEVEN_DIR --" && kill "$p" 2>/dev/null
+    done ;;
+esac
+rm -f "$R/seven.pid" "$R/seven-prompt.pid" "$R/owner_watch.pid" "$R/seven.cdp"
 
 # The process listening on a port, when its command runs the named script; waits up to 5 s for it to end.
 stop_server() {

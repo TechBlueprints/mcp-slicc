@@ -195,6 +195,14 @@ def _with_notes(out: dict, jid: str) -> dict:
     return out
 
 
+# What an attached job on SLICC seven has checked (2026-11-18, README "SLICC seven").
+SEVEN_ATTACH_GATED = (
+    "In an attached SLICC seven job only the steps of the chat that carries start_line, on seven's `local` account (this "
+    "endpoint), are gated here. Not gated: another chat, cone or scoop, any call on another provider (a scoop started "
+    "with --model on Bedrock, say), and codemode's nested calls, which the gate stops codemode for. SLICC seven's owner "
+    "tier (owner.tools) is not set in your own seven by mcp-slicc, so nothing answers it here.")
+
+
 def t_task(a: dict) -> dict:
     if C.current_job():
         raise Err(f"{C.current_job()['id']} is already running; wait for it, or stop it first")
@@ -216,11 +224,15 @@ def t_task(a: dict) -> dict:
         raise Err("backend forward needs forward_url (mcp-slicc config)")
     if C.host_kind() not in C.HOST_KINDS:
         raise Err(f"host {C.host_kind()!r} is not one of {', '.join(C.HOST_KINDS)} (mcp-slicc config)")
+    version = C.slicc_version()
+    if version not in C.SLICC_VERSIONS:
+        raise Err(f"slicc {version!r} is not one of {', '.join(C.SLICC_VERSIONS)} (mcp-slicc config)")
     jid = "job-" + secrets.token_hex(6)
     job = {"id": jid, "instruction": instruction, "model": str(a.get("model") or C.DEFAULT_MODEL),
            "model_explicit": bool(a.get("model")), "mode": mode,
            "launch": launch, "budget": C.STEP_BUDGET, "status": "running", "started": C.now_iso(),
-           "backend": brain, "approval": C.approval(), **({"ref": str(a["ref"])} if a.get("ref") else {})}
+           "backend": brain, "approval": C.approval(), "slicc": version,
+           **({"ref": str(a["ref"])} if a.get("ref") else {})}
     for sub in ("asks", "decisions", "steps"):
         C.make_dirs(C.job_dir(jid) / sub)
     C.write_json(C.HOME / "state" / "job.json", job)
@@ -230,6 +242,7 @@ def t_task(a: dict) -> dict:
                 "slicc": C.start_attached(job), "start_line": C.attach_line(jid),
                 "do_first": "Send start_line as a message in the SLICC open in Chrome. The job runs in the chat that "
                             "carries it, from that message on. Until then SLICC is not waiting and steps stay queued.",
+                **({"gated": SEVEN_ATTACH_GATED} if version == "7" else {}),
                 "next": nxt}
     try:
         slicc = C.start_slicc(job)
@@ -334,7 +347,8 @@ def t_status(_a: dict) -> dict:
     if not rec:
         return {"status": "no job yet"}
     out = {"job": rec["id"], "status": rec.get("status"), "mode": rec.get("mode", "auto"),
-           "launch": rec.get("launch", "launcher"), "approval": C.approval(), "backend": C.backend(),
+           "launch": rec.get("launch", "launcher"), "slicc": rec.get("slicc", "6"),
+           **({"owner_tier": True} if rec.get("owner_tier") else {}), "approval": C.approval(), "backend": C.backend(),
            "host": C.host_kind(), "instruction": rec.get("instruction"),
            "model": rec.get("model"), "started": rec.get("started"), "ended": rec.get("ended")}
     state = C.slicc_state()

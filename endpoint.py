@@ -129,7 +129,7 @@ def start_chat_job(messages: list, tools: Any) -> Optional[dict]:
         jid = "job-" + secrets.token_hex(6)
         job = {"id": jid, "instruction": instruction, "model": C.DEFAULT_MODEL, "model_explicit": False,
                "mode": "auto", "launch": "attach", "origin": "chat", "anchor": anchor, "budget": C.STEP_BUDGET,
-               "status": "running", "started": C.now_iso()}
+               "status": "running", "started": C.now_iso(), "slicc": "7" if C.is_seven_call(tools) else "6"}
         for sub in ("asks", "decisions", "steps"):
             (C.job_dir(jid) / sub).mkdir(parents=True, exist_ok=True)
         C.write_json(C.HOME / "state" / "job.json", job)
@@ -165,6 +165,9 @@ def _final(text: str) -> dict:
 
 def _finish(job: dict, text: str, failed: bool = False) -> dict:
     jid = job["id"]
+    if C.is_stopped(jid):   # a decision that was in flight when slicc_stop came: the job stays stopped (2026-11-18)
+        _log(jid, {"event": "report_after_stop", "failed": failed, "chars": len(text)})
+        return _final("The job was stopped. Stop here.")
     C.write_json(C.job_dir(jid) / "report.json", {"ts": C.now_iso(), "text": text, "failed": failed})
     rec = C.job_record() or {}
     if rec.get("id") == jid:
@@ -279,7 +282,22 @@ def _settle_asks(jid: str) -> None:
         _log(jid, {"event": "ask_answer", "step": s["id"], "answer": d["answer"]})
 
 
-def _manual_turn(job: dict, msgs: list, cancel: threading.Event) -> Optional[dict]:
+def _handed(jid: str, name: str, args: dict) -> None:
+    """A step handed to SLICC seven, by seven's tool name: owner_watch.py answers the owner tier's item for exactly
+    this call without judging it again."""
+    C.append_jsonl(C.job_dir(jid) / "handed.jsonl", {"ts": time.time(), "tool": name, "args": C.args_key(args)})
+
+
+def _tool_call(job: dict, tool: str, args: dict, seven: bool) -> dict:
+    """One step for SLICC: mcp-slicc's tool name as the SLICC that takes it names it."""
+    name = C.native_name(tool, seven)
+    if seven:
+        _handed(job["id"], name, args)
+    return {"id": "call_" + secrets.token_hex(8), "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args, ensure_ascii=False)}}
+
+
+def _manual_turn(job: dict, msgs: list, cancel: threading.Event, seven: bool = False) -> Optional[dict]:
     """A manual job: no model call picks the step. SLICC's call is held until the operator hands it a step (slicc_bash
     and the other step tools write a queued step), or until the operator ends the job (slicc_report) or stops it
     (slicc_stop). The step is SLICC's next tool call; its result answers the step. None when SLICC hung up while the
@@ -304,12 +322,11 @@ def _manual_turn(job: dict, msgs: list, cancel: threading.Event) -> Optional[dic
             queued = [s for s in C.read_steps(jid) if s.get("status") == "queued"]
             if queued:
                 s = queued[0]
-                cid = "call_" + secrets.token_hex(8)
-                s.update(status="delivered", tool_call_id=cid, delivered_ts=C.now_iso())
+                tc = _tool_call(job, s["tool"], s.get("args") or {}, seven)
+                s.update(status="delivered", tool_call_id=tc["id"], delivered_ts=C.now_iso())
                 C.write_step(jid, s)
                 _log(jid, {"event": "step_delivered", "step": s["id"], "tool": s["tool"]})
-                return {"content": "", "tool_calls": [{"id": cid, "type": "function", "function": {
-                    "name": s["tool"], "arguments": json.dumps(s.get("args") or {}, ensure_ascii=False)}}]}
+                return {"content": "", "tool_calls": [tc]}
             if time.time() - started > C.MANUAL_IDLE_S:
                 return _finish(job, "(endpoint) The operator sent no step for an hour, so the job ends here.", failed=True)
             time.sleep(0.2)
@@ -367,7 +384,8 @@ def _route(job: dict, requested: Any) -> tuple:
     return st["model"], st["effort"], "first-call", "spark"
 
 
-def _turn(job: dict, msgs: list, offered: list, cancel: threading.Event, requested: Any = None) -> Optional[dict]:
+def _turn(job: dict, msgs: list, offered: list, cancel: threading.Event, requested: Any = None,
+          seven: bool = False) -> Optional[dict]:
     """An auto job: its model picks the step, on the route of common.turn_model (`requested` is the model SLICC's
     call names, which is the one picked in SLICC): the claude CLI, or the Spark for the qwen-3.8 names.
     Everything after the decision is the same for both: the gate, the approval setting, questions, the budget, the
@@ -466,9 +484,7 @@ def _turn(job: dict, msgs: list, offered: list, cancel: threading.Event, request
                 decider.refuse(step, f"{said} ({v.get('detail')}). Do not try another way; carry on without it, or "
                                      "report.")
                 continue
-        cid = "call_" + secrets.token_hex(8)
-        return {"content": "", "tool_calls": [{"id": cid, "type": "function",
-                                               "function": {"name": tool, "arguments": json.dumps(args, ensure_ascii=False)}}]}
+        return {"content": "", "tool_calls": [_tool_call(job, tool, args, seven)]}
     return _finish(job, "(endpoint) No allowed step came out of several tries. Report what you have.")
 
 
@@ -495,7 +511,8 @@ def _local_call(body: dict, cancel: threading.Event) -> Optional[dict]:
     job = C.current_job() or start_chat_job(msgs, tools)
     if job is None or job_messages(job, msgs, tools) is None:
         return _not_a_job(C.current_job(), msgs, tools)
-    offered = [t for t in C.STEP_TOOLS if t in C.tool_names(tools)] or list(C.STEP_TOOLS)
+    offered = C.step_tools(tools) or list(C.STEP_TOOLS)
+    seven = C.is_seven_call(tools)
     with _lock(job["id"]):
         job = C.current_job()          # re-read: the job may have ended while this call waited for the lock
         mine = job_messages(job, msgs, tools) if job else None
@@ -503,10 +520,13 @@ def _local_call(body: dict, cancel: threading.Event) -> Optional[dict]:
             return _not_a_job(job, msgs, tools)
         if cancel.is_set():            # the caller left while this call waited for the lock
             return None
+        if seven != C.is_seven(job):   # the SLICC that calls decides whose rules judge its steps (an attached job)
+            C.mark_job(job["id"], slicc="7" if seven else "6")
+            job = C.current_job() or job
         _log(job["id"], {"event": "call_received", "messages": len(mine)})
         if job.get("mode") == "manual":
-            return _manual_turn(job, mine, cancel)
-        return _turn(job, mine, offered, cancel, body.get("model"))
+            return _manual_turn(job, mine, cancel, seven)
+        return _turn(job, mine, offered, cancel, body.get("model"), seven)
 
 
 # ----------------------------------------------------------------------------------------- backend forward
@@ -524,7 +544,7 @@ def _forward_log(job: Optional[dict], rec: dict) -> None:
         C.append_jsonl(C.HOME / "side_calls.jsonl", {"ts": C.now_iso(), **rec})
 
 
-def hard_stop(tc: dict) -> dict:
+def hard_stop(tc: dict, seven: bool = False, job: Optional[dict] = None) -> dict:
     """Backend forward: the change gate's verdict on one step the upstream handed over. Only `stop` counts here: the
     upstream gated the step already, and this endpoint never asks. A step whose arguments are not a JSON object is a
     stop too, since nothing could check it."""
@@ -535,7 +555,10 @@ def hard_stop(tc: dict) -> dict:
         args = None
     if not isinstance(args, dict):
         return {"decision": "stop", "reason": "its arguments are not a JSON object", "detail": str(fn.get("name"))}
-    return C.classify(str(fn.get("name") or ""), args)
+    name = str(fn.get("name") or "")
+    if seven and job:   # seven's own rules, with the job's owner tier (codemode)
+        return C.classify_step({**job, "slicc": "7"}, C.SIX_NAMES.get(name, name), args)
+    return C.classify(name, args, seven=seven)
 
 
 def _forward_call(body: dict, cancel: threading.Event, raw: Optional[bytes]) -> Optional[dict]:
@@ -600,7 +623,7 @@ def _forward_call(body: dict, cancel: threading.Event, raw: Optional[bytes]) -> 
         return _final("The job was stopped. Stop here.")
     refused = None
     for tc in calls:
-        v = hard_stop(tc)
+        v = hard_stop(tc, C.is_seven_call(tools), job)
         name = (tc.get("function") or {}).get("name")
         if mine is not None:
             _log(job["id"], {"event": "step", "tool": name, "call": cid,
@@ -646,7 +669,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _route(self) -> tuple:
+        """(path without the token prefix, whether the path carried the endpoint's token). A SLICC seven account is
+        given http://127.0.0.1:<port>/t/<token>/v1 (common.seven_endpoint), since seven sends a keyless account's
+        calls with `Authorization: Bearer local`."""
+        path = self.path.split("?", 1)[0]
+        parts = path.split("/", 3)
+        if len(parts) >= 3 and parts[1] == "t":
+            ok = hmac.compare_digest(parts[2].encode(), C.token().encode())
+            return "/" + (parts[3] if len(parts) > 3 else ""), ok
+        return path, False
+
     def _authorized(self) -> bool:
+        if self._route()[1]:
+            return True
         want = f"Bearer {C.token()}"
         return hmac.compare_digest(self.headers.get("Authorization", ""), want)
 
@@ -665,20 +701,21 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        if self.path.rstrip("/") != "/v1/models":
+        if self._route()[0].rstrip("/") != "/v1/models":
             return self._json(404, {"error": {"message": "not found"}})
         if not self._authorized():
             return self._json(401, {"error": {"message": "unauthorized"}})
         if C.backend() == "forward":                # the upstream's models, each with the code this endpoint runs
             items = F.models() or [{"id": "claude-slicc", "object": "model", "owned_by": "forward"}]
-            return self._json(200, {"object": "list", "data": [{**m, "version": VERSION} for m in items]})
+            return self._json(200, {"object": "list", "data": [{"context_length": C.context_length("claude-slicc"), **m, "version": VERSION}
+                                                                for m in items]})
         ids = ("claude-slicc",) + C.MODEL_MENU     # claude-slicc: the job's own model; the rest name a model
         self._json(200, {"object": "list", "data": [
             {"id": i, "object": "model", "owned_by": getattr(C.parse_model(i), "backend", "claude"),
-             "version": VERSION} for i in ids]})
+             "context_length": C.context_length(i), "version": VERSION} for i in ids]})
 
     def do_POST(self):
-        if self.path.rstrip("/") != "/v1/chat/completions":
+        if self._route()[0].rstrip("/") != "/v1/chat/completions":
             return self._json(404, {"error": {"message": "not found"}})
         if not self._authorized():
             return self._json(401, {"error": {"message": "unauthorized"}})

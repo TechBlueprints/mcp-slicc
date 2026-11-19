@@ -15,6 +15,16 @@
 #    The profile is $CLAUDE_SLICC_HOME/chrome-profile, set through SLICC_USER_DATA_DIR. SLICC's default profile
 #    (~/Library/Application Support/Slicc) and ~/.slicc belong to a SLICC you run yourself and are never deleted
 # 4. SLICC starts with --prompt, and its Chrome opens the local UI, which seeds the endpoint and telemetry-off
+#
+# With "slicc": 7 in config.json (2026-11-18, README "SLICC seven"), steps 3 and 4 are seven's instead, and the local UI
+# is not started:
+# 3. mcp-slicc's own seven profile is wiped (only "<...>/seven-profiles/<profile>", the folder `slicc` itself reports)
+# 4. `slicc` launches Chrome on it, opens seven and links it, with the narrowest link it offers: no kernel services, no
+#    slicc-jerk, no SSH runner, no host folders, and loopback and the LAN refused except the endpoint's port
+# 5. seven.mjs seeds the page over CDP: the keyless `local` account on this endpoint, the model, and the approval policy
+#    owner.tools "user", which owner_watch.py answers with the change gate. A mismatch of versions, or a step that
+#    fails, ends the job with one line
+# 6. `slicc prompt` sends the launch prompt; the job's events go to jobs/<job>/slicc.log, the CDP URL to run/seven.cdp
 set -u
 HOME_DIR="${CLAUDE_SLICC_HOME:-$HOME/.claude-slicc}"
 HERE="$(cd "$(dirname "$0")" && pwd -P)"   # the real folder, also when this script is run through a symlink
@@ -30,6 +40,7 @@ else
   MODE="${3:-launch}"
 fi
 NODE_BIN="${CLAUDE_SLICC_NODE:-node}"
+VERSION="$(python3 "$HERE/common.py" --slicc-version 2>/dev/null)"
 NODE_CLI="${CLAUDE_SLICC_NODE_CLI:-$HOME_DIR/slicc/node_modules/sliccy/dist/node-server/index.js}"
 PROFILE="$HOME_DIR/chrome-profile"
 
@@ -59,7 +70,7 @@ if [ "${CLAUDE_SLICC_NO_SERVERS:-0}" != "1" ]; then
       sleep 0.5
     done
   fi
-  if [ "$MODE" != "attach" ] && ! curl -sf -m 3 -o /dev/null "http://127.0.0.1:$UI_PORT/"; then
+  if [ "$MODE" != "attach" ] && [ "$VERSION" = "6" ] && ! curl -sf -m 3 -o /dev/null "http://127.0.0.1:$UI_PORT/"; then
     nohup python3 "$HERE/ui_server.py" >>"$HOME_DIR/ui.out" 2>&1 &
     sleep 1
   fi
@@ -72,6 +83,14 @@ fi
 if [ "$MODE" = "attach" ]; then
   echo "attached job $JOB: nothing launched"
   exit 0
+fi
+
+if [ "$VERSION" = "7" ]; then
+  exec "$HERE/start_seven.sh" "$JOB" "$PROMPT"
+fi
+if [ "$VERSION" != "6" ]; then
+  python3 "$HERE/common.py" --fail-job "$JOB" "(launcher) slicc \"$VERSION\" is not 6 or 7 (mcp-slicc config)"
+  exit 1
 fi
 
 case "$PROFILE" in

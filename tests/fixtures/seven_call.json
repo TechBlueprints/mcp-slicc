@@ -1,0 +1,446 @@
+{
+ "_doc": "One chat completion call SLICC seven (slicc-agent 8.0.0, seven.sliccy.ai, 2026-11-18) sent to its local account, recorded by a stand-in server. Cut: the system prompt and long tool results. The conversation is a test cone: two prompts, a codemode script, a lick (the page reloaded) and a third prompt.",
+ "path": "/t/<token>/v1/chat/completions",
+ "headers": {
+  "Authorization": "Bearer local",
+  "Content-Type": "application/json"
+ },
+ "body": {
+  "model": "claude-slicc",
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are sliccy, SLICC’s agent, running in the user’s browser tab. Your tools work on slicc-kernel (bash and coreutils compiled to WebAssembly) and the browser’s private file system (OPFS), not on a server or the user’s machine. The user can watch and stop your processes from a terminal next to this chat.\nBe brief, do the work with your tools, and say what you changed.\n\n<system>\nYou run in seven, with slicc-agent 8.0.0 in /opt/agent. Work in /home and /tmp; /os and /opt are the system, so change them only when asked.\nInstall tools with `pnpm add -g <package>` (there is no ipk); /etc/slicc/optio [... cut: SLICC seven's own system prompt, 5942 characters in all]"
+   },
+   {
+    "role": "user",
+    "content": "Say hello."
+   },
+   {
+    "role": "assistant",
+    "content": "recorded"
+   },
+   {
+    "role": "user",
+    "content": "Run the test."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_2",
+      "type": "function",
+      "function": {
+       "name": "bash",
+       "arguments": "{\"intent\":\"Listing home\",\"command\":\"ls /home\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "cone\n",
+    "tool_call_id": "call_2"
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_4",
+      "type": "function",
+      "function": {
+       "name": "codemode",
+       "arguments": "{\"intent\":\"Running two commands\",\"code\":\"const a = await tools.bash({command: \\\"echo one\\\"}); const b = await tools.bash({command: \\\"echo two\\\"}); const c = await tools.read({path: \\\"/etc/hostname\\\"}); return a.output + b.output;\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "Script completed\nWall time 12.7 seconds\nOutput:\n\none\ntwo\n",
+    "tool_call_id": "call_4"
+   },
+   {
+    "role": "assistant",
+    "content": "finished"
+   },
+   {
+    "role": "user",
+    "content": "Check the browser."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_8",
+      "type": "function",
+      "function": {
+       "name": "bash",
+       "arguments": "{\"command\":\"playwright-cli --help 2>&1 | head -n 40; which playwright-cli curl node python3 sudo; echo; playwright-cli open https://example.com\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "playwright-cli - run playwright mcp commands from terminal\n\nUsage: playwright-cli <command> [args] [options]\nUsage: playwright-cli --cdp=<url> <command> [args] [options]\nUsage: playwright-cli -s=<session> <command> [args] [options]\n\nConnect, in order: --cdp <url> wins; else SLICC_CDP_URL; else the slicc browsers JSON listing when slicc is on PATH (prefer sevenOpen, then a slicc profile, then best  [...]",
+    "tool_call_id": "call_8"
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_9",
+      "type": "function",
+      "function": {
+       "name": "bash",
+       "arguments": "{\"command\":\"playwright-cli tab-list; playwright-cli snapshot 2>&1 | head -n 20\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "content": "HTTP 502\nCDP host: no browser to drive: install slicc-extension, or link a computer with npx sliccy@next\nHTTP 502\nCDP host: no browser to drive: install slicc-extension, or link a computer with npx sliccy@next\n",
+    "tool_call_id": "call_9"
+   },
+   {
+    "role": "assistant",
+    "content": "done"
+   },
+   {
+    "role": "user",
+    "content": "<lick id=\"lk-mwn2xy60-d1766702\" channel=\"session-reload\" source=\"kernel\" title=\"The kernel restarted\" count=\"1\" at=\"2026-11-19T04:58:30.072Z\">\nThe page reloaded, so the kernel started fresh: processes from before the reload are gone.\nFiles are unchanged. Start again whatever you still need running.\n</lick>"
+   },
+   {
+    "role": "assistant",
+    "content": "recorded"
+   },
+   {
+    "role": "user",
+    "content": "Check the browser."
+   }
+  ],
+  "stream": true,
+  "stream_options": {
+   "include_usage": true
+  },
+  "max_tokens": 195896,
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "description": "Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to 2000 lines or 50KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string",
+        "description": "Path to the file to read (relative or absolute)"
+       },
+       "offset": {
+        "type": "number",
+        "description": "Line number to start reading from (1-indexed)"
+       },
+       "limit": {
+        "type": "number",
+        "description": "Maximum number of lines to read"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "write",
+     "description": "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string",
+        "description": "Path to the file to write (relative or absolute)"
+       },
+       "content": {
+        "type": "string",
+        "description": "Content to write to the file"
+       }
+      },
+      "required": [
+       "path",
+       "content"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "edit",
+     "description": "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string",
+        "description": "Path to the file to edit (relative or absolute)"
+       },
+       "edits": {
+        "type": "array",
+        "items": {
+         "type": "object",
+         "properties": {
+          "oldText": {
+           "type": "string",
+           "description": "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call."
+          },
+          "newText": {
+           "type": "string",
+           "description": "Replacement text for this targeted edit."
+          }
+         },
+         "required": [
+          "oldText",
+          "newText"
+         ]
+        },
+        "description": "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead."
+       }
+      },
+      "required": [
+       "path",
+       "edits"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "bash",
+     "description": "Execute a bash command in the current working directory. Returns combined stdout and stderr. Output is truncated to last 2000 lines or 50KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "intent": {
+        "type": "string",
+        "description": "What this call does: 2–6 words in the user's language, starting with a present participle; at most 80 characters, no secrets or command output."
+       },
+       "command": {
+        "type": "string",
+        "description": "Bash command to execute"
+       },
+       "timeout": {
+        "type": "number",
+        "description": "Timeout in seconds (optional, no default timeout)"
+       }
+      },
+      "required": [
+       "command"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "memory_write",
+     "description": "Save, replace (same section and title) or remove one entry of a MEMORY.md file: a ## section, a ### title, an optional tag and a body.\nscope \"own\" (the default) is your cone’s memory, or your role’s for a scoop; \"global\" is shared by every agent and only cones write it. A file holds 16384 bytes, and anything that looks like a secret is redacted.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "section": {
+        "type": "string",
+        "description": "The section, such as \"Preferences\" or \"Projects\"."
+       },
+       "title": {
+        "type": "string",
+        "description": "A short title."
+       },
+       "body": {
+        "type": "string",
+        "description": "The entry, in a few lines of markdown."
+       },
+       "tag": {
+        "enum": [
+         "user",
+         "feedback",
+         "project"
+        ]
+       },
+       "remove": {
+        "type": "boolean",
+        "description": "Remove the entry."
+       },
+       "scope": {
+        "enum": [
+         "own",
+         "global"
+        ]
+       }
+      },
+      "required": [
+       "section",
+       "title"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "codemode",
+     "description": "Run JavaScript that calls other tools: raw JavaScript (not JSON, no code fence), run as an async function body in a QuickJS sandbox, so top-level `await` and `return` work. No Node, file system, network or timers.\n- `await tools.<name>({ ...args })` resolves to a string, or an object if its declaration says so, and rejects with an Error on failure. Calls still running when the script ends are cancelled.\n- Optional first line: `// @options: {\"max_output_tokens\": 10000, \"timeout_ms\": 60000}`\n\nGlobals:\n- `text(value)`, `image(dataUrlOrImageBlock)`, `console.log(...)` and top-level `return` add output; `exit()` ends the script.\n- `store(key, value)` and `load(key)` keep JSON values across calls in this conversation.\n- `ALL_TOOLS` lists every tool scripts can call.\n- `await searchTools(query, { limit?, namespace? })`, `await describeTool(name)`, `await describeNamespace(name)`: find unlisted tools, such as MCP tools.\n\nNested tools take the arguments of the tools of the same name: read, write, edit, bash. `tools.bash` resolves to `{ output, exit_code, truncated?, full_output_path? }`.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "intent": {
+        "type": "string",
+        "description": "What this call does: 2–6 words in the user's language, starting with a present participle; at most 80 characters, no secrets or command output."
+       },
+       "code": {
+        "type": "string",
+        "description": "Raw JavaScript source."
+       }
+      },
+      "required": [
+       "code"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "tool_search",
+     "description": "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools for the next model call.\n\nSome of the tools, such as tools of MCP servers, may not have been provided to you upfront, and you should use this tool (`tool_search`) to search for the required tools. For MCP tool discovery, always use `tool_search`.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "query": {
+        "type": "string",
+        "description": "Search query for deferred tools."
+       },
+       "limit": {
+        "type": "number",
+        "description": "Maximum number of tools to return. Defaults to 8."
+       }
+      },
+      "required": [
+       "query"
+      ]
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "lick_confirm",
+     "description": "Confirm a lick that waits for a decision: runs its confirm action.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "lick_id": {
+        "type": "string",
+        "description": "The <lick> id."
+       },
+       "reason": {
+        "type": "string",
+        "description": "Why, in one sentence."
+       }
+      },
+      "required": [
+       "lick_id"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "lick_dismiss",
+     "description": "Dismiss a lick that waits for a decision: runs its dismiss action.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "lick_id": {
+        "type": "string",
+        "description": "The <lick> id."
+       },
+       "reason": {
+        "type": "string",
+        "description": "Why, in one sentence."
+       }
+      },
+      "required": [
+       "lick_id"
+      ],
+      "additionalProperties": false
+     }
+    }
+   },
+   {
+    "type": "function",
+    "function": {
+     "name": "workflow",
+     "description": "Run a Claude Code dynamic workflow (.workflow.js) as a durable background task that survives a reload, or manage runs (list, status, stop, save). Read `agent workflow help` first: this tool takes its options. wait: true returns the result when the run ends, else the run id.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "action": {
+        "enum": [
+         "run",
+         "list",
+         "status",
+         "stop",
+         "save"
+        ]
+       },
+       "file": {
+        "type": "string"
+       },
+       "script": {
+        "type": "string"
+       },
+       "args": {},
+       "budget": {
+        "type": "number"
+       },
+       "concurrency": {
+        "type": "number"
+       },
+       "wait": {
+        "type": "boolean"
+       },
+       "run": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "force": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "action"
+      ],
+      "additionalProperties": false
+     }
+    }
+   }
+  ]
+ }
+}

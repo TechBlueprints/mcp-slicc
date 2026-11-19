@@ -22,6 +22,8 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+os.environ.setdefault("CLAUDE_SLICC_SLICC", "6")   # six's tests; test_seven.py has seven's
+
 sys.path.insert(0, str(HERE.parent))
 import common as C  # noqa: E402
 import claude_turn as T  # noqa: E402

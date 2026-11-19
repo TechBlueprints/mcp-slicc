@@ -13,6 +13,9 @@ layers:
 No sandbox: SLICC runs as you, on your Mac. SLICC's shell, file tools and `node` work in its own virtual filesystem
 (checked with a canary file on 2026-11-09), but its Chrome is a real browser on your network.
 
+Since 2026-11-18 a launcher job runs on SLICC seven (`npx sliccy@next`, the `slicc` CLI and the app at
+`seven.sliccy.ai`), with SLICC six kept as the fallback: see [SLICC seven](#slicc-seven).
+
 That is the default install. Since 2026-11-14 an install can instead hand every SLICC call to another agent (backend
 `forward`), be driven from a shell instead of Claude Code (the operator CLI) and start SLICC through systemd (host
 `systemd`): see [Backends](#backends-one-per-install).
@@ -36,10 +39,115 @@ Python 3.9 or newer, standard library only, and Node.js for SLICC itself. macOS:
 | `spark_turn.py` | one Qwen call on the Spark per decision, for the `qwen-3.8-*` names: native tool calls, and requests built to keep the Spark's KV cache (below) |
 | `job-brief.md` / `chat-brief.md` | what a job's model is told: a job handed over by the operator, or a chat typed in SLICC |
 | `start_slicc.sh` / `stop_slicc.sh` | start SLICC for one job (own Chrome profile, wiped; `--prompt`; local UI) and stop it and its Chrome. They touch only what mcp-slicc started. `servers` starts or stops just the endpoint and the UI |
-| `ui_server.py` | serves SLICC's bundled UI on `127.0.0.1:5711`, seeded to use the endpoint, telemetry off |
-| `tests/` | 163 tests with a stand-in `claude` (`fake_claude.py`), a fake Spark (`test_qwen.py`), a fake upstream agent (`fake_upstream.py`), a stand-in `systemctl` and temporary folders: no login, no spend, no SLICC, no Spark |
+| `ui_server.py` | SLICC six: serves its bundled UI on `127.0.0.1:5711`, seeded to use the endpoint, telemetry off |
+| `start_seven.sh` | SLICC seven: launches, links and seeds seven for one job and sends the prompt (run by `start_slicc.sh`) |
+| `seven.mjs` | SLICC seven: sets the `local` account, the model and the approval policy on seven's page over CDP (Node 22+) |
+| `owner_watch.py` | SLICC seven: answers seven's owner-tier approvals with the change gate, through `slicc approvals` and `slicc decide` |
+| `tests/` | 183 tests with a stand-in `claude` (`fake_claude.py`), a fake Spark (`test_qwen.py`), a fake upstream agent (`fake_upstream.py`), a stand-in `systemctl` and temporary folders: no login, no spend, no SLICC, no Spark |
 
 Run the tests from the repo: `python3 -m unittest discover -s tests -t tests` (Python 3.9 and 3.12 checked).
+
+## SLICC seven
+
+Built 2026-11-18. SLICC seven is the `slicc` CLI (Go, from the npm package `sliccy@next`) driving the app hosted at
+`https://seven.sliccy.ai` in a Chrome it launches. Seven's agent has pi's coding tools (`bash`, `read`, `write`,
+`edit`) on a Linux-like kernel in the browser with users and `sudo`, plus `codemode`, `memory_write`, `workflow`,
+`tool_search` and licks. Its `local` provider takes any OpenAI-compatible server, and this endpoint is that server.
+
+### Install and config
+
+```bash
+npm pack sliccy@7.0.0-next.1.69.1       # check the tarball's sha256 before you install it
+npm install --prefix ~/.claude-slicc/slicc7 --ignore-scripts sliccy-7.0.0-next.1.69.1.tgz
+```
+
+That brings `slicc` 1.69.1 for this platform (an optional dependency of the package). Six stays where it is, under
+`~/.claude-slicc/slicc/`. Node 22 or newer runs `seven.mjs`. `"slicc": 7` in `config.json` (the default) makes a
+launcher job start seven; `"slicc": 6` brings six back, with nothing else to change.
+
+### What a launcher job does on seven
+
+`start_slicc.sh` stops the SLICC of an earlier job, checks the endpoint, and runs `start_seven.sh`:
+
+1. **Version check.** `slicc capabilities --json` must say contract 1 and a 1.x CLI, and the agent seven installs must
+   be slicc-agent 8.x. Anything else ends the job with one line saying which, and nothing runs.
+2. **A fresh profile.** mcp-slicc's own seven profile (`mcp-slicc`, the folder `slicc` reports, under
+   `~/Library/Application Support/slicc/seven-profiles/` on a Mac) is wiped, so no chat, file, memory or account of an
+   earlier job is left. The first start installs seven's agent and tools: about two minutes from the job's start to
+   its first step on this Mac.
+3. **Launch and link.** `slicc --profile mcp-slicc --browser chrome --json --yes --no-fallback --no-kernel --no-jerk`,
+   with loopback and the private ranges denied except the endpoint's port. Seven's browser commands
+   (`playwright-cli`) need the link: without one they answer "no browser to drive". The link offers `net`, `http`,
+   `credentialed`, `ws`, `udp` and `cdp`; no kernel services, no slicc-jerk, no SSH runner, no host folders.
+4. **Seeding, without a person** (`seven.mjs`). The CLI has no command for an account, the model or the approval
+   policy, so they are set over CDP on seven's page, through the objects seven's own Settings use (found on the page's
+   heap by the methods they offer): the page's settings store `connect('local', …)` (what "Connect without a key"
+   calls), `update({ model: 'local/claude-slicc' })`, and the agent connection's
+   `approvalPolicySet({ owner: { tools: 'user' } })`. Nothing is clicked or typed. The account is keyless: seven sends
+   a keyless account's calls with `Authorization: Bearer local`, and a key would have to be typed into the vault's own
+   field. So the endpoint's token is in the account's address instead, `http://127.0.0.1:8660/t/<token>/v1`, and the
+   endpoint accepts its token in the path or in the header.
+5. **The owner tier.** `owner_watch.py` follows `slicc approvals --watch --json` and answers every `owner-tool` item
+   (below), and the job is marked `owner_tier`.
+6. **The prompt.** `slicc prompt --cdp <url> --json` sends the launch prompt; its events go to the job's `slicc.log`.
+
+`slicc_stop` runs `slicc abort`, ends `slicc prompt`, the watcher and `slicc`, which closes the Chrome it launched,
+and ends a Chrome still on that profile folder. Only processes this install started are touched (by the pids in
+`run/` and their command lines); a seven you run yourself, on another profile or in your own Chrome, is never matched.
+
+### What is gated
+
+- **Every step on the `local` account** goes through the endpoint and the change gate, as on six. A seven step is
+  judged by the gate's `slicc7_classify` with seven's tool names (`slicc_gate.json` section `slicc7`); a gate without
+  seven's rules stops every seven step. mcp-slicc keeps six's names inside (`read_file`, `write_file`), and a step
+  goes to seven as `read` or `write`.
+- **Seven's rules.** Read-only commands and browser reads run; `sudo` and the rest are asked (seven's own `sudo` dialog
+  stays as a second lock, and nothing here answers it). Never run: seven's link (`slicc`), scoops (`agent`,
+  `subagent`, which can run on another model), skills and installs (`upskill`, `pnpm`, `npm`, `npx`), secrets
+  (`fnox`), devices, mounts, SSH, Tailscale, users and `crontab`; any command that writes and names a control
+  (`/etc/slicc`, `/etc/sudoers`, `/etc/fnox`, `.pi/agent`, …); writes under `/etc`, `/opt`, `/usr`, `~/.pi`, skills,
+  `MEMORY.md`, `CLAUDE.md`, `AGENTS.md` and workflows (paths are made absolute and `..` folded first); the tools
+  `memory_write`, `workflow` and `lick_confirm`. Reads of host folders (`/mnt`) are asked. Every tool without a rule
+  (an MCP server's, say) is asked.
+- **The owner tier.** With `owner.tools: user`, seven files every tool call of its cones and scoops, nested `codemode`
+  calls included, as an item that waits up to 5 minutes. `owner_watch.py` answers each: a call the endpoint itself
+  handed seven is `once` without a second check; otherwise the gate decides (`auto` is `once`, `stop` is `deny` with
+  the gate's reason, `ask` goes to the classifier or to `slicc_decide`, as the endpoint's own gated steps do).
+  Arguments seven cut short are denied. `always` is never given. If the watcher is not running nobody answers, and
+  seven denies the call after 5 minutes.
+- **`codemode`** (one call whose script runs other tools, of which the model boundary sees only the script) is stopped
+  by the gate, except in a job whose seven files its nested calls through the owner tier: there the script runs, and
+  each nested call is judged as it comes (live on 2026-11-18: a script's `ls` and `read` ran, and its write to
+  `~/.pi/agent/settings.json` was denied with the gate's reason, 0.7 s for the three items). One script files one item
+  for itself and one per nested call. mcp-slicc's own models are offered only the four step tools, so they never pick
+  it; an upstream agent (backend `forward`) can.
+- **Attached jobs** (`launch: attach`, a seven in your own Chrome): only the job's chat on the `local` account is gated.
+  Another chat, cone or scoop, a call on another provider, and codemode's nested calls are not; the `slicc_task` reply
+  says so (`gated`). mcp-slicc does not set the owner tier in your own seven.
+
+### What differs from six
+
+| | six | seven |
+| --- | --- | --- |
+| The app | `dist/ui` of sliccy 6.258.2, served by `ui_server.py` | hosted at `seven.sliccy.ai`, not pinned; the version check stands in |
+| Model setup | `/claude-slicc-seed.js` in localStorage | `seven.mjs` over CDP, keyless, token in the address |
+| Shell | SLICC's virtual shell | a WebAssembly Linux-like kernel, as user `cone` (no node, no python) |
+| Tools | `bash`, `read_file`, `write_file`, `edit`, SLICC's own | `bash`, `read`, `write`, `edit`, `codemode`, `memory_write`, `workflow`, `tool_search`, licks |
+| Events in the chat | `[time] sender: …` | `<lick id="lk-…" channel="…">…</lick>`; neither starts a chat job |
+| Gate | the endpoint, on every step | the endpoint, plus the owner tier for every call (nested ones too) |
+| Network | your network, signed-out Chrome | public addresses only, through the link; loopback and the LAN refused except the endpoint |
+| Stop | kill the node CLI and its Chrome | `slicc abort`, then end `slicc`, which closes its Chrome |
+| A fresh job | wiped Chrome profile | wiped seven profile, about two minutes to the first step |
+
+**Hosts the launcher's seven contacted** in a job from a fresh profile (2026-11-18, every page, worker and service
+worker of its Chrome, over CDP): `seven.sliccy.ai`, `vault.sliccy.ai`, `registry.npmjs.org`, `api.github.com`,
+`raw.githubusercontent.com`, `cdn.jsdelivr.net`, `use.typekit.net`, `static.cloudflareinsights.com` (Cloudflare's
+analytics beacon, from the hosted page; seven has no switch for it), and the job's own pages. The model calls go over
+the link to `127.0.0.1:8660`. `SLICC_NO_TELEMETRY=1` and `SLICC_NO_UPDATE_CHECK=1` are set wherever mcp-slicc runs
+`slicc`.
+
+**Not verified on seven:** attached jobs (seven in your own Chrome), chat jobs typed in seven, backend `forward` and
+host `systemd`, and seven's own `sudo` dialog in a launcher job.
 
 ## The tools
 
@@ -397,7 +505,8 @@ only its own questions folder.
 
 ## Setup
 
-1. **Install SLICC** where the scripts look for it, with install scripts off. Built and tested with `sliccy` 6.258.2:
+1. **Install SLICC seven** as in [SLICC seven](#slicc-seven), and **SLICC six** as the fallback, where the scripts look
+   for it, with install scripts off. Six was built and tested with `sliccy` 6.258.2:
    ```bash
    npm pack sliccy@6.258.2        # check the tarball's sha256 before you install it
    npm install --prefix ~/.claude-slicc/slicc --ignore-scripts sliccy-6.258.2.tgz
@@ -464,6 +573,7 @@ headless step session. Use it for anything they must agree on. An environment va
 | `systemctl` | `systemctl` | `systemd`: the command, a string or a list |
 | `state_mode` | none (`0600` records) | the mode of files written under `CLAUDE_SLICC_HOME`, octal |
 | `state_owner` | none | the user that owns what a root process writes under `CLAUDE_SLICC_HOME` |
+| `slicc` | `7` | which SLICC a launcher job starts: `7` ([SLICC seven](#slicc-seven)) or `6` (the fallback). Any other value runs nothing |
 
 ### Environment
 
@@ -491,7 +601,12 @@ headless step session. Use it for anything they must agree on. An environment va
 | `CLAUDE_SLICC_SPARK_URL` / `_KEY` / `_MODEL` | `config.json`, then as above | the Spark, for the Qwen routes |
 | `CLAUDE_SLICC_SPARK_TIMEOUT` / `_CONTEXT` | `900` / `262144` | seconds for one Spark call; the Spark's context window in tokens |
 | `CLAUDE_SLICC_SCHEMA` | `1` | `--json-schema` for an auto job's step. `0` reads the step from the reply text |
-| `CLAUDE_SLICC_ORIGINS` | `http://localhost:5711,https://www.sliccy.ai` | the page origins that may call the endpoint |
+| `CLAUDE_SLICC_ORIGINS` | `http://localhost:5711,https://www.sliccy.ai,https://seven.sliccy.ai` | the page origins that may call the endpoint |
+| `CLAUDE_SLICC_SLICC` | `config.json`, then `7` | which SLICC a launcher job starts |
+| `CLAUDE_SLICC_SEVEN_BIN` / `_SEVEN_PROFILE` / `_SEVEN_BROWSER` | the install under `CLAUDE_SLICC_HOME` / `mcp-slicc` / `chrome` | seven's `slicc`, its profile name and the browser it launches |
+| `CLAUDE_SLICC_OWNER_TIER` | `user` | `off`: no owner tier and no watcher, and codemode stays stopped |
+| `CLAUDE_SLICC_SEVEN_LINK_WAIT` / `_SEVEN_SEED_WAIT` | `180` / `300` | seconds for seven to link, and to install its agent and take the seeding |
+| `CLAUDE_SLICC_CONTEXT` | `200000` | the context window `/v1/models` reports for the Claude names (the Qwen names report the Spark's) |
 | `CLAUDE_SLICC_PORT` / `_UI_PORT` | `8660` / `5711` | the endpoint and the local UI |
 | `CLAUDE_SLICC_START_CMD` / `_STOP_CMD` | `start_slicc.sh {job} {prompt}` / `stop_slicc.sh` | start and stop SLICC for a job; `""` disables |
 | `CLAUDE_SLICC_NODE` / `_NODE_CLI` / `_UI_ROOT` | `node` / the install under `CLAUDE_SLICC_HOME` | SLICC's node, its CLI and its bundled UI |
@@ -531,7 +646,8 @@ watches that connection. When SLICC closes it:
 
 ## Where things are
 
-`~/.claude-slicc/`: `config.json` (settings, when set), `token` (the endpoint's key), `slicc/` (the install),
+`~/.claude-slicc/`: `config.json` (settings, when set), `token` (the endpoint's key), `slicc/` (six's install),
+`slicc7/` (seven's `slicc`),
 `chrome-profile/`, `run/` (the running SLICC's job id and, with host `systemd`, `slicc.env`), `side_calls.jsonl` (calls
 that belong to no job), `state/job.json` (the current job), and `jobs/<job>/`.
 
@@ -547,6 +663,8 @@ chat job also has `origin: chat` and `anchor`. In a job's folder:
 | `asks/`, `decisions/` | questions and their answers (`allow`, `deny`, `withdrawn`, `expired`) |
 | `steer.jsonl`, `stop`, `report.json`, `slicc.log` | notes, the stop flag, the report, SLICC's own log (launcher jobs) |
 | `tabs.json` | the tabs the job opened, read from what its own `open` commands printed |
+| `seven.events`, `seven.err`, `seven.seed.json`, `owner_watch.log` | SLICC seven: `slicc`'s lifecycle events, its errors, the seeding's answer, the watcher's errors |
+| `handed.jsonl` | SLICC seven: each step the endpoint handed seven (tool and arguments), so the owner tier's item for it is answered without a second check |
 | `spark.json`, `spark_inserts.jsonl`, `screens.json` | a Qwen job: its fixed route and system message, the endpoint's own messages with their places, the screen's verdict per result |
 
 ## Not verified

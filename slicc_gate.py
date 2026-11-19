@@ -16,6 +16,8 @@ Another gate can be used instead (CLAUDE_SLICC_GATE, or "gate" in ~/.claude-slic
 offer:
 
   slicc_classify(tool, args) -> {"decision": "auto" | "ask" | "stop", "reason": str, "detail": str}
+  slicc7_classify(tool, args) -> the same for SLICC seven's tools (2026-11-18); a gate without it stops every seven
+                                step. A stop of a tool on its stop_tools list carries "rule": "stop_tools"
   _segments(command)         -> the command's pipeline, ; and && parts as token lists, or None when it writes or
                                 cannot be read plainly
   load_policy()              -> {"slicc": {...}} with at least browser_commands and browser_read_verbs; common.py sets
@@ -39,8 +41,8 @@ def load_policy() -> dict:
         return json.load(f)
 
 
-def _pol() -> dict:
-    return (POLICY or load_policy()).get("slicc") or {}
+def _pol(section: str = "slicc") -> dict:
+    return (POLICY or load_policy()).get(section) or {}
 
 
 # ----------------------------------------------------------------------------------------- secrets in a step
@@ -158,9 +160,10 @@ def url_kind(url) -> str:
 
 # ----------------------------------------------------------------------------------------- the verdicts
 
-def slicc_command(cmd) -> dict:
-    """Verdict on one bash line SLICC's model wants to run: {decision: auto|ask|stop, reason, detail}."""
-    sp = _pol()
+def slicc_command(cmd, section: str = "slicc") -> dict:
+    """Verdict on one bash line SLICC's model wants to run: {decision: auto|ask|stop, reason, detail}. `section` is
+    the policy's rule set: slicc (six) or slicc7 (seven)."""
+    sp = _pol(section)
     detail = f"run in SLICC's shell: `{redact_text(cmd, 600)}`"
     if not isinstance(cmd, str) or not cmd.strip():
         return {"decision": "stop", "reason": "an empty command", "detail": detail}
@@ -174,6 +177,10 @@ def slicc_command(cmd) -> dict:
         if named:
             return {"decision": "stop", "reason": f"`{named[0]}` is never run by SLICC ({sp.get('stop_reason', '')})",
                     "detail": detail}
+        touched = [w for w in sp.get("control_words", []) if w in cmd]
+        if touched:
+            return {"decision": "stop", "reason": f"the command writes or runs something and names {touched[0]}, one "
+                    "of SLICC's controls, which SLICC never changes", "detail": detail}
         return {"decision": "ask", "reason": "the command writes, redirects or cannot be read plainly", "detail": detail}
     ro, browser = set(sp.get("readonly_commands", [])), set(sp.get("browser_commands", []))
     b_read, b_nav = set(sp.get("browser_read_verbs", [])), set(sp.get("browser_navigate_verbs", []))
@@ -209,12 +216,30 @@ def slicc_command(cmd) -> dict:
         asks.append(name)
     if not asks:
         return {"decision": "auto", "reason": "read-only in SLICC's own workspace", "detail": detail}
+    touched = [w for w in sp.get("control_words", []) if w in cmd]
+    if touched:
+        return {"decision": "stop", "reason": f"the command is not read-only and names {touched[0]}, one of SLICC's "
+                "controls, which SLICC never changes", "detail": detail}
     return {"decision": "ask", "reason": "needs a person: " + "; ".join(dict.fromkeys(asks)), "detail": detail}
 
 
-def _path_verdict(path, verb) -> dict:
-    sp = _pol()
+def _seven_path(path) -> str:
+    """A SLICC seven path as the kernel will resolve it: relative to the cone's home, with . and .. folded, so
+    /tmp/../etc/x is /etc/x."""
+    p = str(path or "")
+    if not p.startswith("/"):
+        p = _pol("slicc7").get("home", "/home/cone").rstrip("/") + "/" + (p[2:] if p.startswith("~/") else p)
+    out = os.path.normpath(p)
+    return out + "/" if p.endswith("/") and not out.endswith("/") else out
+
+
+def _path_verdict(path, verb, section: str = "slicc") -> dict:
+    sp = _pol(section)
+    if section == "slicc7":
+        path = _seven_path(path)
     detail = f"{verb} {redact_text(path, 300)} in SLICC's workspace"
+    if any(fnmatch.fnmatch(path, g) for g in sp.get("host_paths", [])):
+        return {"decision": "ask", "reason": f"{path} is in a folder shared from the host", "detail": detail}
     if verb == "read":   # its own workspace: no secrets live there, and the profile is fresh every job
         return {"decision": "auto", "reason": "a read in SLICC's workspace", "detail": detail}
     if any(fnmatch.fnmatch(path, g) for g in sp.get("control_paths", [])):
@@ -241,4 +266,26 @@ def slicc_classify(tool, args) -> dict:
     if tool == "read_file":
         return _path_verdict(str(args.get("path") or args.get("file_path") or ""), "read")
     return {"decision": "ask", "reason": f"{tool} is not a SLICC tool the gate knows",
+            "detail": f"SLICC tool {tool}: {redact_text(json.dumps(args, ensure_ascii=False), 400)}"}
+
+
+def slicc7_classify(tool, args) -> dict:
+    """Verdict on one tool call of SLICC seven (2026-11-18): pi's bash, read, write and edit on seven's kernel, and
+    seven's own tools. Every tool without a rule is asked. codemode is stopped here (rule stop_tools); mcp-slicc lets
+    it run only where seven's owner tier files its nested calls for this gate one by one."""
+    sp = _pol("slicc7")
+    args = args if isinstance(args, dict) else {}
+    if tool == "bash":
+        return slicc_command(str(args.get("command") or args.get("cmd") or ""), "slicc7")
+    if tool in sp.get("internal_tools", []):
+        return {"decision": "auto", "reason": "SLICC's own bookkeeping", "detail": f"SLICC tool {tool}"}
+    if tool in sp.get("stop_tools", []):
+        return {"decision": "stop", "rule": "stop_tools", "reason": f"{tool} is never used by SLICC "
+                f"({sp.get('stop_reason', '')})", "detail": f"SLICC tool {tool}: "
+                f"{redact_text(json.dumps(args, ensure_ascii=False), 400)}"}
+    if tool in ("write", "edit"):
+        return _path_verdict(str(args.get("path") or args.get("file_path") or ""), "write", "slicc7")
+    if tool == "read":
+        return _path_verdict(str(args.get("path") or args.get("file_path") or ""), "read", "slicc7")
+    return {"decision": "ask", "reason": f"{tool} is not a SLICC seven tool the gate knows",
             "detail": f"SLICC tool {tool}: {redact_text(json.dumps(args, ensure_ascii=False), 400)}"}

@@ -24,6 +24,8 @@ import urllib.request
 from pathlib import Path
 
 from fake_upstream import FakeUpstream, final, step
+os.environ.setdefault("CLAUDE_SLICC_SLICC", "6")   # six's tests; test_seven.py has seven's
+
 from test_claude_slicc import HERE, TOOLS_BODY, Base, main_body, start_job
 
 import common as C
@@ -576,6 +578,7 @@ class OperatorCLI(SettingsBase):
             "host": "systemd", "systemd_units": ["slicc-worker.service"], "systemctl": [str(fake)],
             "forward_asks": str(self.asks / "{job}"), "state_mode": "0644"})
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_SLICC_")}
+        self.env["CLAUDE_SLICC_SLICC"] = "6"
         self.env["FAKE_SYSTEMCTL_LOG"] = str(self.ctl_log)
 
     def op(self, *argv, stdin: str = None) -> tuple:

@@ -73,6 +73,7 @@ class Scripts(unittest.TestCase):
         self.addCleanup(self._end, self.decoy)
         self.env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_SLICC_")}
         self.env.update(HOME=str(self.home), CLAUDE_SLICC_HOME=str(self.cs), CLAUDE_SLICC_NODE=str(fake_node),
+                        CLAUDE_SLICC_SLICC="6",
                         CLAUDE_SLICC_NO_SERVERS="1", FAKE_NODE_OUT=str(self.out))
 
     @staticmethod

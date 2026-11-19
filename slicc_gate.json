@@ -1,5 +1,5 @@
 {
- "_doc": "The policy of slicc_gate.py, read for every step SLICC's model wants to take. readonly_commands and browser_read_verbs run; stop_commands and stop_tools never run; browser navigation, other browser verbs and every other command are asked. Reads in SLICC's workspace run, writes to control_paths never happen, writes under scratch_paths run. Paths are fnmatch globs (* also matches /).",
+ "_doc": "The policy of slicc_gate.py, read for every step SLICC's model wants to take. readonly_commands and browser_read_verbs run; stop_commands and stop_tools never run; browser navigation, other browser verbs and every other command are asked. Reads in SLICC's workspace run, writes to control_paths never happen, writes under scratch_paths run. Paths are fnmatch globs (* also matches /). slicc7 is the same for SLICC seven (2026-11-18): its own tools and commands, its control paths, and every tool without a rule asked.",
  "slicc": {
   "stop_reason": "SLICC's cloud, devices, credentials, its own controls and memory stay off",
   "stop_commands": [
@@ -27,5 +27,52 @@
    "/workspace/.mcp/*", "/workspace/.jshd/*"
   ],
   "scratch_paths": ["/tmp/", "/workspace/jobs/"]
+ },
+ "slicc7": {
+  "_doc": "SLICC seven: pi's coding tools (bash, read, write, edit) on a Linux-like kernel with users and sudo, plus codemode, memory_write, workflow, tool_search and licks. Read by slicc7_classify(). Paths are made absolute (relative to /home/cone) and normalised first.",
+  "stop_reason": "SLICC seven's controls, secrets, installs, devices, links, scoops and memory stay off",
+  "stop_commands": [
+   "slicc", "agent", "subagent", "upskill", "gh-upskill", "mount", "umount", "serial", "usb", "hid", "esptool",
+   "fnox", "pnpm", "npm", "npx", "tailscale", "ssh", "scp", "sftp", "su", "passwd", "visudo", "useradd", "usermod",
+   "userdel", "groupadd", "groupmod", "groupdel", "chpasswd", "crontab", "secret", "memory"
+  ],
+  "readonly_commands": [
+   "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "find", "jq", "echo", "printf", "pwd", "sort",
+   "uniq", "cut", "tr", "diff", "cmp", "comm", "nl", "seq", "basename", "dirname", "stat", "file", "xxd", "date",
+   "uptime", "ps", "which", "help", "man", "true", "test", "[", "md5sum", "sha256sum", "base64", "tree", "column",
+   "realpath", "readlink", "sleep", "id", "uname", "whoami", "groups", "env", "printenv", "du", "df", "less", "more"
+  ],
+  "browser_commands": [
+   "playwright-cli", "playwright", "puppeteer"
+  ],
+  "browser_read_verbs": [
+   "snapshot", "screenshot", "tab-list", "list", "frames"
+  ],
+  "browser_navigate_verbs": [
+   "open", "goto", "tab-new", "navigate"
+  ],
+  "internal_tools": [
+   "tool_search", "lick_dismiss"
+  ],
+  "stop_tools": [
+   "codemode", "memory_write", "workflow", "lick_confirm"
+  ],
+  "stop_tools_doc": "codemode is one call whose script runs other tools that the model boundary never sees; it runs only where SLICC seven's owner tier files each nested call for this gate (mcp-slicc's common.classify_step).",
+  "control_paths": [
+   "/etc/*", "/opt/*", "/usr/*", "/bin/*", "/sbin/*", "/lib/*", "/var/lib/slicc/*", "/node_modules/*", "*/.pi/*",
+   "*/.agents/*", "*/.config/*", "*/.local/*", "*/.ssh/*", "*/.bashrc", "*/.profile", "*/MEMORY.md", "*/CLAUDE.md",
+   "*/AGENTS.md", "*/skills/*", "*/.workflows/*", "*.workflow.js"
+  ],
+  "control_words": [
+   "/etc/slicc", "/etc/sudoers", "/etc/fnox", ".pi/agent", "/etc/passwd", "/etc/shadow", "/etc/group",
+   "secrets-policy", "APPROVALS.md"
+  ],
+  "host_paths": [
+   "/mnt/*"
+  ],
+  "scratch_paths": [
+   "/tmp/", "/workspace/jobs/"
+  ],
+  "home": "/home/cone"
  }
 }
