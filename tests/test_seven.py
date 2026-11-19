@@ -347,7 +347,8 @@ class TheLauncher(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp, True)
         self.home, self.cs = self.tmp / "home", self.tmp / "cs"
-        self.pdir = self.home / "Library" / "Application Support" / "slicc" / "seven-profiles" / "mcp-slicc"
+        conf = self.home / ("Library/Application Support" if sys.platform == "darwin" else ".config")   # slicc's
+        self.pdir = conf / "slicc" / "seven-profiles" / "mcp-slicc"
         (self.pdir / "Default").mkdir(parents=True)
         (self.pdir / "Default" / "old.txt").write_text("from the last job")
         self.other = self.pdir.parent / "mcp-slicc-mine"
@@ -371,7 +372,7 @@ class TheLauncher(unittest.TestCase):
                         'if [ -n "$FAKE_SEED" ]; then echo "$FAKE_SEED"; else echo \'{"ok":true}\'; fi\n')
         node.chmod(0o755)
         self.log = self.tmp / "slicc.log"
-        self.env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_SLICC_")}
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("CLAUDE_SLICC_") and k != "XDG_CONFIG_HOME"}
         self.env.update(HOME=str(self.home), CLAUDE_SLICC_HOME=str(self.cs), CLAUDE_SLICC_SEVEN_BIN=str(fake),
                         CLAUDE_SLICC_NODE=str(node), CLAUDE_SLICC_NO_SERVERS="1", CLAUDE_SLICC_SLICC="7",
                         CLAUDE_SLICC_OWNER_TIER="off", CLAUDE_SLICC_SEVEN_LINK_WAIT="10",

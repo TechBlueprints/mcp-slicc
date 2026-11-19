@@ -53,6 +53,7 @@ PDIR="$(cat "$RUN/seven.profile" 2>/dev/null)"
 if [ -z "$PDIR" ]; then
   case "$(uname)" in
     Darwin) PDIR="$HOME/Library/Application Support/slicc/seven-profiles/$PROFILE" ;;
+    Linux) PDIR="${XDG_CONFIG_HOME:-$HOME/.config}/slicc/seven-profiles/$PROFILE" ;;   # slicc-cli's README, slicc launch
   esac
 fi
 case "$PDIR" in
