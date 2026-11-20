@@ -386,6 +386,9 @@ def is_attached(job: Optional[dict]) -> bool:
     return bool(job) and job.get("launch") == "attach"
 
 
+START_LINE = re.compile(r"Start claude-slicc job (job-[0-9a-f]{12})\.")   # attach_line's form
+
+
 def attach_line(jid: str) -> str:
     """The one line that joins a SLICC chat to an attached job. It is typed or pasted into that SLICC as a message; the
     endpoint takes the chat from that message on as the job, so an older chat in the same tab is not mistaken for it."""
@@ -889,9 +892,17 @@ def start_attached(job: dict) -> str:
     return "not started: this job joins the SLICC that is already running in your Chrome"
 
 
+LEFT_RUNNING = "left running: this job was attached to the SLICC in your Chrome, which mcp-slicc never stops"
+
+
 def stop_slicc(job: dict) -> str:
     if is_attached(job):
-        return "left running: this job was attached to the SLICC in your Chrome, which mcp-slicc never stops"
+        # SLICC seven (2026-11-19): mcp-slicc's own follower is ended, which puts your approval policy back first
+        # (attach_seven.sh). Your seven and your Chrome are left as they are.
+        if is_seven(job) and host_kind() == "macos" and STOP_CMD and (HOME / "run" / "attach.pid").exists():
+            _run_cmd(f"{STOP_CMD} attach quiet", job, "")
+            return LEFT_RUNNING + "; mcp-slicc's follower ends and puts your seven's approval policy back"
+        return LEFT_RUNNING
     if host_kind() == "systemd":
         units = systemd_units()
         if not units:
@@ -952,6 +963,8 @@ if __name__ == "__main__":
         sys.exit(0 if end_job_failed(argv[1], argv[2]) else 1)
     elif argv[:1] == ["--owner-tier"] and len(argv) == 2:
         sys.exit(0 if mark_job(argv[1], owner_tier=True) else 1)
+    elif argv[:1] == ["--attach-tier"] and len(argv) == 3:
+        sys.exit(0 if mark_job(argv[1], attach_tier=argv[2][:500]) else 1)
     else:
         sys.exit("usage: common.py --code-version | --slicc-version | --seven-endpoint | --fail-job <job> <text> | "
-                 "--owner-tier <job>")
+                 "--owner-tier <job> | --attach-tier <job> <text>")

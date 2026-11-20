@@ -88,6 +88,9 @@ NOT_A_JOB = ("This SLICC's model is the local mcp-slicc endpoint, which only ans
              "start line here as a message.")
 
 
+ENDED = "mcp-slicc's job {job} has ended (done, failed or stopped). Nothing more is run for it here. Stop here."
+
+
 BUSY = ("mcp-slicc is working on another job ({job}) right now, so this chat gets no job of its own. Send your "
         "message again when that job has ended.")
 _chat_guard = threading.Lock()
@@ -116,6 +119,11 @@ def start_chat_job(messages: list, tools: Any) -> Optional[dict]:
     if C.job_prompt(first) == C.AUTO_PROMPT or not instruction:
         return None
     if not C.sent_by_person(newest):       # SLICC's own event (a discovery, a lick, cron): it never starts a job
+        return None
+    # Only a message the person just sent starts a job: the call ends with it. A call that ends in SLICC's own step and
+    # its result is a turn going on after its job ended or was stopped (2026-11-19: an attached seven job stopped
+    # mid-run, seven's next call came with no job running, and its start line became a chat job's instruction).
+    if users[-1] != len(messages) - 1 or C.START_LINE.fullmatch(instruction):
         return None
     with _chat_guard:
         if C.current_job():
@@ -148,6 +156,9 @@ def _not_a_job(job: Optional[dict], messages: list, tools: Any) -> dict:
         return _final("")                                  # SLICC's own event: no job, and nothing to say
     if job is None and C.job_prompt(first) == C.AUTO_PROMPT:
         return _final("No SLICC job is running. Stop here.")   # a launcher SLICC whose job has ended
+    ended = C.START_LINE.fullmatch(C.job_prompt(newest))
+    if ended and (job is None or job["id"] != ended.group(1)):
+        return _final(ENDED.format(job=ended.group(1)))       # an attached job's chat, after its job ended
     if job is not None and C.CHAT_JOBS:
         return _final(BUSY.format(job=job["id"]))          # one job at a time
     if job is None or C.is_attached(job):

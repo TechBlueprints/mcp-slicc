@@ -41,9 +41,10 @@ Python 3.9 or newer, standard library only, and Node.js for SLICC itself. macOS:
 | `start_slicc.sh` / `stop_slicc.sh` | start SLICC for one job (own Chrome profile, wiped; `--prompt`; local UI) and stop it and its Chrome. They touch only what mcp-slicc started. `servers` starts or stops just the endpoint and the UI |
 | `ui_server.py` | SLICC six: serves its bundled UI on `127.0.0.1:5711`, seeded to use the endpoint, telemetry off |
 | `start_seven.sh` | SLICC seven: launches, links and seeds seven for one job and sends the prompt (run by `start_slicc.sh`) |
-| `seven.mjs` | SLICC seven: sets the `local` account, the model and the approval policy on seven's page over CDP (Node 22+) |
-| `owner_watch.py` | SLICC seven: answers seven's owner-tier approvals with the change gate, through `slicc approvals` and `slicc decide` |
-| `tests/` | 183 tests with a stand-in `claude` (`fake_claude.py`), a fake Spark (`test_qwen.py`), a fake upstream agent (`fake_upstream.py`), a stand-in `systemctl` and temporary folders: no login, no spend, no SLICC, no Spark |
+| `seven.mjs` | SLICC seven: sets the `local` account, the model and the approval policy on seven's page over CDP; for an attached job, follows your seven, sets its policy and lists and answers its approvals (Node 22+) |
+| `owner_watch.py` | SLICC seven: answers seven's owner-tier approvals with the change gate, through `slicc approvals` and `slicc decide`, or through mcp-slicc's follower in an attached job |
+| `attach_seven.sh` | SLICC seven, an attached job: runs mcp-slicc's follower for the length of the job, sets your seven's owner tier and puts it back |
+| `tests/` | 195 tests with a stand-in `claude` (`fake_claude.py`), a fake Spark (`test_qwen.py`), a fake upstream agent (`fake_upstream.py`), a stand-in `systemctl` and temporary folders: no login, no spend, no SLICC, no Spark |
 
 Run the tests from the repo: `python3 -m unittest discover -s tests -t tests` (Python 3.9 and 3.12 checked).
 
@@ -121,9 +122,9 @@ and ends a Chrome still on that profile folder. Only processes this install star
   `~/.pi/agent/settings.json` was denied with the gate's reason, 0.7 s for the three items). One script files one item
   for itself and one per nested call. mcp-slicc's own models are offered only the four step tools, so they never pick
   it; an upstream agent (backend `forward`) can.
-- **Attached jobs** (`launch: attach`, a seven in your own Chrome): only the job's chat on the `local` account is gated.
-  Another chat, cone or scoop, a call on another provider, and codemode's nested calls are not; the `slicc_task` reply
-  says so (`gated`). mcp-slicc does not set the owner tier in your own seven.
+- **Attached jobs** (`launch: attach`, a seven in your own Chrome, since 2026-11-19): the job's chat is gated at the
+  endpoint, and the rest of your seven through the owner tier, which mcp-slicc's follower sets for the length of the job
+  and puts back after it. See [Attached jobs on seven](#attached-jobs-on-seven).
 
 ### What differs from six
 
@@ -146,8 +147,77 @@ analytics beacon, from the hosted page; seven has no switch for it), and the job
 the link to `127.0.0.1:8660`. `SLICC_NO_TELEMETRY=1` and `SLICC_NO_UPDATE_CHECK=1` are set wherever mcp-slicc runs
 `slicc`.
 
-**Not verified on seven:** attached jobs (seven in your own Chrome), chat jobs typed in seven, backend `forward` and
-host `systemd`, and seven's own `sudo` dialog in a launcher job.
+**Not verified on seven:** chat jobs typed in seven (one started by itself once, and was fixed: see below), backend
+`forward` and host `systemd` with mcp-slicc's own launcher scripts, and seven's own `sudo` dialog.
+
+### Attached jobs on seven
+
+Built and run live 2026-11-19. The job runs in the seven open in your own, signed-in Chrome; its browser commands
+(`playwright-cli`) drive that Chrome through the SLICC extension. Nothing on the computer can reach that tab: Chrome
+does not let a program attach to your everyday profile unless you turn on remote debugging, and asks you about each
+connection when you do. So mcp-slicc keeps a **follower seven** of its own: a headless Chrome on a profile of its own
+(`mcp-slicc-follow`, kept between jobs), which follows your seven through seven's follow link and which you allow
+**View** once. View makes it an owner device: it can set the approval policy and answer approvals, and nothing else (no
+Control: it cannot send, steer or stop anything; no Terminal). It can read your seven's chats.
+
+**What you install and set up, once:**
+
+1. **The SLICC extension** from the Chrome Web Store (`slicc`, id `akjjllgokmbgpbdbmafpiefnhidlmbgf`), 7.10.0 or later
+   (browser automation in seven). It serves six and seven alike; the store updates it.
+2. **Seven** at `https://seven.sliccy.ai/` in a tab of that Chrome. It needs no account and no sign-in. Six on
+   `www.sliccy.ai` is a separate origin and stays as it is (seven's in-place upgrade on `www.sliccy.ai` would retire six
+   in that browser; it is not needed).
+3. **The `local` account** on this endpoint, keyless, with the token in the address: Settings → Accounts → Add a
+   provider → Local or self-hosted, endpoint `http://127.0.0.1:8660/t/<token>/v1` (`python3 common.py --seven-endpoint |
+   pbcopy` puts it on the clipboard without showing it), "Connect without a key"; then pick `claude-slicc` as the model.
+4. **The follow link** in `~/.claude-slicc/seven-follow` (mode 0600): Network → Linked devices → Link another device →
+   Open on another device, the `https://seven.sliccy.ai/#follow=…` link. It is a secret: anyone with it can ask to
+   follow your seven (you still have to allow them).
+5. **Allow View** for mcp-slicc's follower: start one attached job (below) and, while it waits, turn on **View** for
+   "SLICC on macOS" under Network → Linked devices (leave Control and Terminal off). The grant is kept with the
+   follower's profile, so later jobs need nothing from you. The first time, the follower also confirms seven's own
+   "Follow a SLICC on another computer?" in its own page.
+
+**A job.** `slicc_task` with `launch: "attach"` returns the `start_line`; `start_slicc.sh … attach` brings the endpoint
+up at the code on disk and starts `attach_seven.sh`, which:
+
+1. launches the follower (`slicc launch --profile mcp-slicc-follow --headless`) and waits until it follows with View
+   (`seven.mjs follow`, a few seconds once its profile has the agent's client cached);
+2. keeps your policy's `owner.tools` (`run/attach.policy.json`) and sets it to `user` (`seven.mjs policy`), through the
+   follower's agent connection (`approvalPolicySet`, found on the follower page's heap over the follower's own CDP);
+3. marks the job `owner_tier`, records `attach_tier` (`on: …` or `off: <why>`, shown by `slicc_status`), and runs
+   `owner_watch.py --follower`: every `owner-tool` item of your seven (the job's steps, codemode's nested calls, any
+   other cone or scoop, any provider) is answered with the change gate, through one `seven.mjs approvals` process that
+   reads the items from the follower's replicated approvals and decides on the same connection;
+4. when the job ends (done, failed, or `slicc_stop`, which also signals it), puts `owner.tools` back and closes the
+   follower's Chrome. A restore that fails keeps `attach.policy.json`, so the next job puts back your own value, not
+   `user`.
+
+Then send `start_line` as a message in your seven's chat. The job is that chat from that message on, as on six.
+
+**What is gated:** every step the endpoint gives the job's chat, by seven's rules (`slicc7`), with the attached-read
+rule: `tab-list`, and a snapshot or screenshot of a tab the job did not open, are asked (live: three `tab-list` tries
+by a job's model were refused by the classifier). With the tier on, everything else in your seven is filed and judged
+by the same gate while the job runs. When the tier cannot be set (`attach_tier: off: …`: no follow link, no View, your
+seven refused), nothing in your seven is changed: the job's chat is still gated at the endpoint, codemode is stopped,
+and calls on another provider or in another chat are not gated. Seven's `sudo` stays seven's own dialog.
+
+**After a job.** A call of the job's chat that comes after the job ended (seven finishing a turn after `slicc_stop`)
+is answered "mcp-slicc's job … has ended" and starts nothing: since 2026-11-19 a chat job starts only from a message the
+person just sent (the call ends with it) that is not a start line. Before that fix, a stopped job's next call started a
+chat job whose instruction was the start line, which then ran without the owner tier.
+
+**What you see in your seven:** the follower under Linked devices ("Watching"); for each step the follower answered, a
+dialog "Answered elsewhere … wants to run bash for you" with Close, which stays until closed; the tabs the job opened,
+which it leaves open unless told to close them; and seven's own side calls to the model (tool labels), which get an
+empty answer.
+
+**Stop** ends the job and the follower. Your seven and your Chrome are never stopped, reloaded or signalled.
+
+Live on 2026-11-19 (seven in a person's own Chrome, extension 7.15.0, slicc-agent 8.1.1): a read-only job on
+example.com; a gated `open` asked and allowed with `slicc_decide` (approvals `operator` for that job); a manual job
+whose write to `~/.pi/agent/settings.json` was refused and never reached seven; `slicc_stop` after the first step;
+each with the tier on during the job and `owner.tools` back to `off` after it, read again through a fresh follower.
 
 ## The tools
 
@@ -325,7 +395,8 @@ only the first tool call of a reply is taken.
 
 ## Attached jobs: the SLICC in your own Chrome
 
-Built 2026-11-10, for searches that need your sign-ins. `slicc_task` with `launch: "attach"` starts nothing. It
+Built 2026-11-10 on six, for searches that need your sign-ins; on seven see [Attached jobs on seven](#attached-jobs-on-seven),
+whose setup replaces the six setup below. `slicc_task` with `launch: "attach"` starts nothing. It
 returns a `start_line`, for example `Start claude-slicc job job-1a2b3c4d5e6f.` Send that line as a message in the
 SLICC that is open in Chrome. The job is that chat from that message on; an older chat in the same tab, or any chat
 without the line, is not the job and gets a one-line hint instead of a step. `slicc_stop` ends the job and never
@@ -606,6 +677,8 @@ headless step session. Use it for anything they must agree on. An environment va
 | `CLAUDE_SLICC_SEVEN_BIN` / `_SEVEN_PROFILE` / `_SEVEN_BROWSER` | the install under `CLAUDE_SLICC_HOME` / `mcp-slicc` / `chrome` | seven's `slicc`, its profile name and the browser it launches |
 | `CLAUDE_SLICC_OWNER_TIER` | `user` | `off`: no owner tier and no watcher, and codemode stays stopped |
 | `CLAUDE_SLICC_SEVEN_LINK_WAIT` / `_SEVEN_SEED_WAIT` | `180` / `300` | seconds for seven to link, and to install its agent and take the seeding |
+| `CLAUDE_SLICC_SEVEN_FOLLOW` | `$CLAUDE_SLICC_HOME/seven-follow` | an attached job's follow link to your seven (mode 0600) |
+| `CLAUDE_SLICC_SEVEN_FOLLOWER_PROFILE` / `_SEVEN_FOLLOWER_HEADLESS` / `_SEVEN_FOLLOW_WAIT` | `mcp-slicc-follow` / `1` / `180` | the follower's kept profile, whether its Chrome is headless, and seconds for it to follow with View |
 | `CLAUDE_SLICC_CONTEXT` | `200000` | the context window `/v1/models` reports for the Claude names (the Qwen names report the Spark's) |
 | `CLAUDE_SLICC_PORT` / `_UI_PORT` | `8660` / `5711` | the endpoint and the local UI |
 | `CLAUDE_SLICC_START_CMD` / `_STOP_CMD` | `start_slicc.sh {job} {prompt}` / `stop_slicc.sh` | start and stop SLICC for a job; `""` disables |
@@ -647,14 +720,16 @@ watches that connection. When SLICC closes it:
 ## Where things are
 
 `~/.claude-slicc/`: `config.json` (settings, when set), `token` (the endpoint's key), `slicc/` (six's install),
-`slicc7/` (seven's `slicc`),
-`chrome-profile/`, `run/` (the running SLICC's job id and, with host `systemd`, `slicc.env`), `side_calls.jsonl` (calls
+`slicc7/` (seven's `slicc`), `seven-follow` (the follow link to your seven, for attached jobs),
+`chrome-profile/`, `run/` (the running SLICC's job id and, with host `systemd`, `slicc.env`; for an attached seven job
+`attach.pid`, `follower.pid`, `follower.cdp` and `attach.policy.json`, your `owner.tools` until it is put back), `side_calls.jsonl` (calls
 that belong to no job), `state/job.json` (the current job), and `jobs/<job>/`.
 
 `state/job.json` is the job record: `id`, `instruction`, `model`, `model_explicit`, `mode` (`auto` or `manual`),
 `launch` (`launcher` or `attach`), `budget`, `status` (`running`, `done`, `failed` or `stopped`), `started`, `ended`,
 and since 2026-11-14 `backend`, `approval` (the setting it was started under) and `ref` (when the CLI passed one). A
-chat job also has `origin: chat` and `anchor`. In a job's folder:
+chat job also has `origin: chat` and `anchor`. A seven job has `slicc: "7"` and, once the tier is on, `owner_tier`; an
+attached seven job also `attach_tier`. In a job's folder:
 
 | File | What |
 |---|---|
@@ -665,6 +740,7 @@ chat job also has `origin: chat` and `anchor`. In a job's folder:
 | `tabs.json` | the tabs the job opened, read from what its own `open` commands printed |
 | `seven.events`, `seven.err`, `seven.seed.json`, `owner_watch.log` | SLICC seven: `slicc`'s lifecycle events, its errors, the seeding's answer, the watcher's errors |
 | `handed.jsonl` | SLICC seven: each step the endpoint handed seven (tool and arguments), so the owner tier's item for it is answered without a second check |
+| `attach.log`, `follower.events` | an attached seven job: what attach_seven.sh did (tier on or off and why, the policy put back, the follower closed) and `slicc launch`'s events for the follower |
 | `spark.json`, `spark_inserts.jsonl`, `screens.json` | a Qwen job: its fixed route and system message, the endpoint's own messages with their places, the screen's verdict per result |
 
 ## Not verified

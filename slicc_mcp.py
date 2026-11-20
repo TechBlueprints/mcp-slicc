@@ -195,12 +195,15 @@ def _with_notes(out: dict, jid: str) -> dict:
     return out
 
 
-# What an attached job on SLICC seven has checked (2026-11-18, README "SLICC seven").
+# What an attached job on SLICC seven has checked (2026-11-19, README "Attached jobs on seven").
 SEVEN_ATTACH_GATED = (
-    "In an attached SLICC seven job only the steps of the chat that carries start_line, on seven's `local` account (this "
-    "endpoint), are gated here. Not gated: another chat, cone or scoop, any call on another provider (a scoop started "
-    "with --model on Bedrock, say), and codemode's nested calls, which the gate stops codemode for. SLICC seven's owner "
-    "tier (owner.tools) is not set in your own seven by mcp-slicc, so nothing answers it here.")
+    "Every step the job's chat (the one that carries start_line) gets from this endpoint is gated here. For the rest "
+    "of your seven, mcp-slicc's follower (a Chrome of its own that follows your seven with View) sets owner.tools "
+    "'user' for the length of the job and answers each owner-tool item with the same gate: codemode's nested calls, "
+    "other cones and scoops, and calls on another provider. It puts the policy back when the job ends, fails or is "
+    "stopped. slicc_status shows attach_tier: 'on: ...' once that is in force, 'off: <why>' when it could not be "
+    "(no follow link, no View for the follower, your seven refused): then only this endpoint's steps are gated, codemode "
+    "is stopped, and calls on another provider or in another chat are not gated. Seven's sudo stays seven's own dialog.")
 
 
 def t_task(a: dict) -> dict:
@@ -348,7 +351,9 @@ def t_status(_a: dict) -> dict:
         return {"status": "no job yet"}
     out = {"job": rec["id"], "status": rec.get("status"), "mode": rec.get("mode", "auto"),
            "launch": rec.get("launch", "launcher"), "slicc": rec.get("slicc", "6"),
-           **({"owner_tier": True} if rec.get("owner_tier") else {}), "approval": C.approval(), "backend": C.backend(),
+           **({"owner_tier": True} if rec.get("owner_tier") else {}),
+           **({"attach_tier": rec["attach_tier"]} if rec.get("attach_tier") else {}),
+           "approval": C.approval(), "backend": C.backend(),
            "host": C.host_kind(), "instruction": rec.get("instruction"),
            "model": rec.get("model"), "started": rec.get("started"), "ended": rec.get("ended")}
     state = C.slicc_state()

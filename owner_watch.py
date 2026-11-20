@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """mcp-slicc's answer to SLICC seven's owner tier (2026-11-18, README "SLICC seven"). Stdlib only.
 
-    python3 owner_watch.py <job> <cdp-url>
+    python3 owner_watch.py <job> <cdp-url> [--follower]
 
 The launcher sets seven's approval policy to owner.tools "user" (seven.mjs). From then on seven files every tool call
 of its cones and scoops, codemode's nested calls included, as an `owner-tool` item that waits up to 5 minutes for an
@@ -16,6 +16,11 @@ it follows `slicc approvals --watch --json` over the launcher's CDP endpoint and
     headless session puts that exact call to Claude Code's classifier (claude_turn.approve_step); otherwise it is a
     question of the job that slicc_decide answers
   * arguments seven cut short (argsTruncated) or cannot be read are denied: the gate never saw all of them
+
+With --follower (an attached job, 2026-11-19, README "Attached jobs on seven") the CDP URL is the Chrome of mcp-slicc's
+follower seven, which follows the person's own seven with View: an owner device. The items come from the agent
+connection on that page (`seven.mjs approvals`, one process for the job), and the answers go back through the same
+process. The gate's verdicts are the same.
 
 "always" is never given, so no rule outlives the job. Other kinds (sudo, capture, guests) are left alone: nothing here
 answers seven's sudo, which stays seven's own second lock. When this process is not running, nobody answers, and seven
@@ -51,7 +56,25 @@ def _log(jid: str, rec: dict) -> None:
     C.append_jsonl(C.job_dir(jid) / "calls.jsonl", {"ts": C.now_iso(), "event": "owner_tool", **rec})
 
 
+FOLLOWER = {"proc": None}
+FOLLOWER_LOCK = threading.Lock()
+
+
+def seven_mjs() -> list:
+    return [os.environ.get("CLAUDE_SLICC_NODE", "node"), str(Path(__file__).resolve().parent / "seven.mjs")]
+
+
 def decide(cdp: str, item: str, answer: str, reason: str = "") -> bool:
+    proc = FOLLOWER["proc"]
+    if proc is not None:              # the follower: the answer goes through the job's one seven.mjs approvals process
+        line = json.dumps({"id": item, "answer": answer, **({"reason": reason[:500]} if reason else {})})
+        try:
+            with FOLLOWER_LOCK:
+                proc.stdin.write(line + "\n")
+                proc.stdin.flush()
+            return True
+        except (OSError, ValueError):
+            return False
     cmd = [slicc_bin(), "decide", "--cdp", cdp, item, answer, "--json"] + (["--reason", reason[:500]] if reason else [])
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=_env(), stdin=subprocess.DEVNULL)
@@ -149,13 +172,19 @@ def handle(cdp: str, item: dict) -> None:
                "detail": str(v.get("detail", ""))[:300], "sent": ok})
 
 
-def watch(jid: str, cdp: str) -> None:
+def watch(jid: str, cdp: str, follower: bool = False) -> None:
     while True:
         rec = C.job_record() or {}
         if rec.get("id") != jid or rec.get("status") != "running":
             return
-        proc = subprocess.Popen([slicc_bin(), "approvals", "--cdp", cdp, "--watch", "--json"], stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, env=_env())
+        if follower:
+            proc = subprocess.Popen(seven_mjs() + ["approvals", "--cdp", cdp], stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, stdin=subprocess.PIPE, text=True, env=_env())
+            FOLLOWER["proc"] = proc
+        else:
+            proc = subprocess.Popen([slicc_bin(), "approvals", "--cdp", cdp, "--watch", "--json"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                                    text=True, env=_env())
         stop = threading.Event()
 
         def ender():
@@ -171,6 +200,8 @@ def watch(jid: str, cdp: str) -> None:
                     ev = json.loads(line)
                 except ValueError:
                     continue
+                if ev.get("event") == "error" and ev.get("id"):
+                    _log(jid, {"item": ev.get("id"), "answer": None, "note": f"not answered: {ev.get('message')}"[:300]})
                 if ev.get("event") != "approvals":
                     continue
                 for item in ev.get("approvals") or []:
@@ -185,14 +216,18 @@ def watch(jid: str, cdp: str) -> None:
                     threading.Thread(target=handle, args=(cdp, item), daemon=True).start()
         finally:
             stop.set()
+            FOLLOWER["proc"] = None
             proc.terminate()
         time.sleep(2)
 
 
 def main() -> None:
-    if len(sys.argv) != 3 or not C.JOB_ID.fullmatch(sys.argv[1]):
-        sys.exit("usage: owner_watch.py <job> <cdp-url>")
-    watch(sys.argv[1], sys.argv[2])
+    argv = sys.argv[1:]
+    follower = "--follower" in argv
+    argv = [a for a in argv if a != "--follower"]
+    if len(argv) != 2 or not C.JOB_ID.fullmatch(argv[0]):
+        sys.exit("usage: owner_watch.py <job> <cdp-url> [--follower]")
+    watch(argv[0], argv[1], follower)
 
 
 if __name__ == "__main__":

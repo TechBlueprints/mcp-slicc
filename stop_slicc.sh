@@ -25,12 +25,27 @@ PIDF="$HOME_DIR/run/slicc.pid"
 MATCH="$NODE_CLI --prompt "
 QUIET=0
 SERVERS=0
+ATTACH_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     quiet) QUIET=1 ;;
     servers) SERVERS=1 ;;
+    attach) ATTACH_ONLY=1 ;;
   esac
 done
+
+# An attached job on seven (2026-11-19): attach_seven.sh, by its pid in run/ and only when that is its command. SIGTERM
+# makes it put the person's approval policy back and close mcp-slicc's follower Chrome; this waits up to 30 s for it.
+# The person's own seven and Chrome are never signalled. With "attach" nothing else is stopped.
+AP="$(cat "$HOME_DIR/run/attach.pid" 2>/dev/null)"
+if [ -n "$AP" ] && ps -o command= -p "$AP" 2>/dev/null | grep -qF "attach_seven.sh"; then
+  kill "$AP" 2>/dev/null
+  for _ in $(seq 1 150); do kill -0 "$AP" 2>/dev/null || break; sleep 0.2; done
+fi
+if [ "$ATTACH_ONLY" = "1" ]; then
+  [ "$QUIET" = "1" ] || echo "stopped"
+  exit 0
+fi
 
 # The debug port of the Chrome this SLICC launched, read from its own log before anything is stopped.
 JOB="$(cat "$HOME_DIR/run/slicc.job" 2>/dev/null)"

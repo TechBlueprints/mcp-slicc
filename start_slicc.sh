@@ -4,7 +4,9 @@
 # Usage: start_slicc.sh <job-id> <prompt> [attach]    or    start_slicc.sh servers
 #
 # With "attach" (an attached job, 2026-11-10) only steps 1 and 2 run, without the UI: nothing is launched and no
-# profile is touched. The job runs in the SLICC that is already open in the person's own Chrome.
+# profile is touched. The job runs in the SLICC that is already open in the person's own Chrome. With "slicc": 7
+# (2026-11-19) attach_seven.sh then runs for the length of the job: mcp-slicc's follower seven sets the owner tier in
+# the person's seven and answers it, and puts the policy back when the job ends (README "Attached jobs on seven").
 # With "servers" only step 2 runs, UI included, and nothing else is started or stopped: after `stop_slicc.sh servers`
 # it brings the endpoint and the UI back up at the code on disk. Run it when no job is running.
 #
@@ -81,7 +83,12 @@ if [ "$MODE" = "servers" ]; then
   exit 0
 fi
 if [ "$MODE" = "attach" ]; then
-  echo "attached job $JOB: nothing launched"
+  if [ "$VERSION" = "7" ]; then
+    nohup "$HERE/attach_seven.sh" "$JOB" >/dev/null 2>&1 </dev/null &
+    echo "attached job $JOB: nothing launched; the owner tier through mcp-slicc's follower (jobs/$JOB/attach.log)"
+  else
+    echo "attached job $JOB: nothing launched"
+  fi
   exit 0
 fi
 
