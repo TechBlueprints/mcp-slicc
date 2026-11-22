@@ -42,7 +42,21 @@
   "stop_commands": [
    "slicc", "agent", "subagent", "upskill", "gh-upskill", "mount", "umount", "serial", "usb", "hid", "esptool",
    "fnox", "pnpm", "npm", "npx", "tailscale", "ssh", "scp", "sftp", "su", "passwd", "visudo", "useradd", "usermod",
-   "userdel", "groupadd", "groupmod", "groupdel", "chpasswd", "crontab", "secret", "memory"
+   "userdel", "groupadd", "groupmod", "groupdel", "chpasswd", "crontab", "secret", "memory", "jerk", "sealed"
+  ],
+  "secret_doc": "2026-11-21 (README \"Logins on seven\"): the credential commands secret_commands, and any command starting with a secret_command_prefixes entry, may only read a placeholder or a list (secret_read: each pattern is the command's words with no flag but --json, * one name that is not in secret_read_not_names). Anything else of theirs (create, reveal, refresh, rescope, import, export, a tab move) is stopped. They stay in stop_commands for a command the gate cannot read plainly. A vault placeholder (fnox_proxy_ and 24 hex digits) in a command is not a secret.",
+  "secret_commands": ["jerk", "sealed", "secret", "fnox"],
+  "secret_command_prefixes": ["oauth-"],
+  "secret_read": [["jerk", "list"], ["jerk", "*", "get"], ["jerk", "*", "list"], ["sealed", "list"],
+                  ["sealed", "placeholder", "*"], ["secret", "list"], ["fnox", "get", "*"], ["fnox", "list"]],
+  "secret_read_not_names": ["tab", "config", "intercept", "upgrade", "update", "mcp"],
+  "session_doc": "2026-11-21 (README \"Logins on seven\"): in a job whose browser holds a signed-in session, session_stop_commands (they can drive the browser over CDP or read its cookies) are stopped, and so is every browser command verb outside session_browser_verbs (page JavaScript, cookies, storage, state, routes, downloads). Clicks and typing are asked as in every job.",
+  "session_stop_commands": ["node", "jsh", "python", "python3", "pip", "pip3", "ruby", "irb", "perl", "deno", "bun",
+                            "curlwright", "websocat"],
+  "session_browser_verbs": [
+   "snapshot", "screenshot", "tab-list", "list", "frames", "open", "goto", "tab-new", "navigate", "tab-select",
+   "tab-close", "close", "click", "dblclick", "fill", "type", "press", "select", "check", "uncheck", "hover", "drag",
+   "scroll", "wait", "wait-for", "back", "forward", "reload", "resize"
   ],
   "readonly_commands": [
    "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "rg", "find", "jq", "echo", "printf", "pwd", "sort",

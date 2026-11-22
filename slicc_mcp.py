@@ -230,12 +230,20 @@ def t_task(a: dict) -> dict:
     version = C.slicc_version()
     if version not in C.SLICC_VERSIONS:
         raise Err(f"slicc {version!r} is not one of {', '.join(C.SLICC_VERSIONS)} (mcp-slicc config)")
+    try:
+        logins = C.parse_logins(a.get("logins"))
+    except ValueError as e:
+        raise Err(str(e)) from None
+    if logins and not (C.host_kind() == "systemd" and version == "7" and launch == "launcher"
+                       and C.approval() == "external"):
+        raise Err("logins are for a launcher job on SLICC seven with host systemd and approval external (a broker "
+                  "that checked the approval itself, README \"Logins on seven\")")
     jid = "job-" + secrets.token_hex(6)
     job = {"id": jid, "instruction": instruction, "model": str(a.get("model") or C.DEFAULT_MODEL),
            "model_explicit": bool(a.get("model")), "mode": mode,
            "launch": launch, "budget": C.STEP_BUDGET, "status": "running", "started": C.now_iso(),
            "backend": brain, "approval": C.approval(), "slicc": version,
-           **({"ref": str(a["ref"])} if a.get("ref") else {})}
+           **({"ref": str(a["ref"])} if a.get("ref") else {}), **({"logins": logins} if logins else {})}
     for sub in ("asks", "decisions", "steps"):
         C.make_dirs(C.job_dir(jid) / sub)
     C.write_json(C.HOME / "state" / "job.json", job)
@@ -350,6 +358,7 @@ def t_status(_a: dict) -> dict:
     if not rec:
         return {"status": "no job yet"}
     out = {"job": rec["id"], "status": rec.get("status"), "mode": rec.get("mode", "auto"),
+           **({"logins": rec["logins"]} if rec.get("logins") else {}),
            "launch": rec.get("launch", "launcher"), "slicc": rec.get("slicc", "6"),
            **({"owner_tier": True} if rec.get("owner_tier") else {}),
            **({"attach_tier": rec["attach_tier"]} if rec.get("attach_tier") else {}),

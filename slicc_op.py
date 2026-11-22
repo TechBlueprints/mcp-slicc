@@ -6,6 +6,7 @@ external, README "Approvals"). The functions are slicc_mcp.py's, so a job starte
 see. Usage (--home before the command; it is the state folder, CLAUDE_SLICC_HOME, whose config.json is read):
 
   slicc_op.py [--home DIR] task "<instruction>" [--mode auto|manual] [--launch launcher|attach] [--model M] [--ref R]
+                                [--login SERVICE:token|SERVICE:session ...]   (README "Logins on seven")
   slicc_op.py [--home DIR] wait <job> [--seconds N]                     up to 600 s; default 40
   slicc_op.py [--home DIR] decide <ask> allow|deny [--wants TEXT] [--ref R]
   slicc_op.py [--home DIR] tell <job> "<note>" [--ref R]
@@ -44,6 +45,8 @@ def parser() -> argparse.ArgumentParser:
     t.add_argument("--launch", choices=("launcher", "attach"))
     t.add_argument("--model")
     t.add_argument("--ref")
+    t.add_argument("--login", action="append", metavar="SERVICE:ROUTE",
+                   help="a login for this job (token or session; host systemd, seven, approval external)")
     w = sub.add_parser("wait", help="follow the job")
     w.add_argument("job")
     w.add_argument("--seconds", type=float)
@@ -88,7 +91,7 @@ def call(argv: list) -> tuple:
     c = args.cmd
     if c == "task":
         name, a = "slicc_task", {"instruction": args.instruction, "mode": args.mode, "launch": args.launch,
-                                 "model": args.model, "ref": args.ref}
+                                 "model": args.model, "ref": args.ref, "logins": args.login}
     elif c == "wait":
         name, a = "slicc_wait", {"job": args.job, "seconds": args.seconds}
     elif c == "decide":

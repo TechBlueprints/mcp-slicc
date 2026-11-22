@@ -26,6 +26,8 @@
 // The follow link is read from its file and never printed. The only click is on the follower's own "Follow"
 // confirmation, in mcp-slicc's Chrome; the person's seven is reached only through the follower's agent connection.
 
+import { secretFiles } from './seven_secret.mjs';
+
 const args = process.argv.slice(2);
 const cmd = args.shift();
 const opt = (name, dflt) => {
@@ -46,9 +48,11 @@ const USAGE = `usage:
   seven.mjs follow --cdp <url> --follow-file <path> [--timeout s]
   seven.mjs policy --cdp <url> --owner-tier user|agent|off
   seven.mjs approvals --cdp <url>
-  seven.mjs decide --cdp <url> <id> once|deny [--reason text]`;
+  seven.mjs decide --cdp <url> <id> once|deny [--reason text]
+  seven.mjs secret --cdp <url> --name NAME --source jerk:<p>@<d> --domains host[,host] [--header h] [--methods M,..]
+                   [--paths /p,..] [--refuse-url URL]   (the value on stdin)`;
 if (typeof WebSocket !== 'function') fail(`seven.mjs needs Node 22 or newer (this is ${process.version})`);
-if (!['seed', 'follow', 'policy', 'approvals', 'decide'].includes(cmd)) fail(USAGE);
+if (!['seed', 'follow', 'policy', 'approvals', 'decide', 'secret'].includes(cmd)) fail(USAGE);
 
 const cdpBase = String(opt('cdp', '')).replace(/\/+$/, '');
 const endpoint = opt('endpoint', '');
@@ -381,5 +385,159 @@ async function decideCmd() {
   done({ ok: true, schema: 1, event: 'decided', id, answer });
 }
 
-const COMMANDS = { seed: main, follow, policy: policyCmd, approvals: approvalsCmd, decide: decideCmd };
+// ------------------------------------------------------------------------------------------------- a sealed credential
+//
+//   node seven.mjs secret --cdp <url> --name NAME --source jerk:<provider>@<device> --domains host[,host...]
+//                         [--header authorization] [--methods GET,...] [--paths /a,...] [--refuse-url URL]  < value
+//
+// (2026-11-21, README "Logins on seven"; for a deployment that holds the credential itself, such as a household agent's
+// vault.) One credential for this job goes into seven's vault (vault.sliccy.ai, its own origin), never into the kernel,
+// the agent or a file: the value is read from stdin, passed to bios's own vault object on seven's page as a call
+// argument (vault.seal, the op bios uses for a linked device's lease), and dropped. Then, as root in seven's kernel
+// (bios's kernel.run, the page's own caller), the job's policy is written: /etc/fnox/config.toml (the placeholder in
+// [secrets] and one [[proxy.rules]] per domain), /etc/slicc/secrets-policy.toml ([exits] NAME = ["page"], [reveal]
+// agent = false) and /etc/profile.d/mcp-slicc-secrets.sh (NAME=<placeholder> for login shells). The vault takes rules
+// only from those root-owned files, attested by the kernel under users enforce, so the agent cannot widen them. The
+// command waits for the vault to accept both files, then checks the vault's own verdicts (/dev/sealed test): inject on
+// every domain, refuse on --refuse-url (default https://example.org/). It prints {"ok": true, name, placeholder, state,
+// rules, tests}; the value is never printed. Several secrets in one job: run it once per secret (the policy keeps
+// them all, in the root-only /etc/slicc/mcp-slicc-secrets.json).
+//
+// Seven's own jerk cannot do this (2026-11-21, checked on seven with slicc-jerk 1.9.1): from seven, a linked machine's
+// CLI provider answers `get` with "no token ... in seven's vault" and its `create` is refused over the link, and bios
+// answers a kernel jerk-seal request with "signing in from seven arrives with a later seven".
+
+const SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
+const SECRET_SOURCE = /^jerk:[a-z0-9][a-z0-9-]{0,63}@[A-Za-z0-9._:-]{1,64}$/;
+const HOST_NAME = /^(?=.{1,253}$)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
+const PLACEHOLDER = /^fnox_proxy_[0-9a-f]{24}$/;
+const SPEC_FILE = '/etc/slicc/mcp-slicc-secrets.json';
+const FNOX_FILE = '/etc/fnox/config.toml';
+const POLICY_FILE = '/etc/slicc/secrets-policy.toml';
+const PROFILE_FILE = '/etc/profile.d/mcp-slicc-secrets.sh';
+
+const FIND_VAULT = `function () {
+  const fn = (o, k) => { try { return typeof o[k] === 'function'; } catch { return false; } };
+  const ok = (f) => this.filter((o) => { try { return f(o); } catch { return false; } });
+  const kernels = ok((o) => fn(o, 'run') && fn(o, 'connect') && o.users && typeof o.users.mode === 'string');
+  const vaults = ok((o) => fn(o, 'call') && fn(o, 'seal') && fn(o, 'forward') && 'scrubText' in o);
+  globalThis.__mcpSlicc = { kernel: kernels[0], vault: vaults[0] };
+  return [kernels.length, vaults.length, kernels[0] ? kernels[0].users.mode : ''];
+}`;
+
+async function callOn(sid, functionDeclaration, values = []) {
+  const g = await send('Runtime.evaluate', { expression: 'globalThis.__mcpSlicc' }, sid);
+  const r = await send('Runtime.callFunctionOn', { objectId: g.result.objectId, functionDeclaration,
+    arguments: values.map((value) => ({ value })), awaitPromise: true, returnByValue: true }, sid);
+  if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description?.split('\n')[0] || r.exceptionDetails.text);
+  return r.result.value;
+}
+
+// One argv in seven's kernel as the page's own caller (root), its output collected.
+const krun = (sid, argv) => callOn(sid, `async function (argv) {
+  let stdout = '', stderr = '';
+  const r = await this.kernel.run(argv, { cwd: '/', onStdout: (c) => { stdout += c; }, onStderr: (c) => { stderr += c; } });
+  return { status: r.status, stdout, stderr };
+}`, [argv]);
+
+async function writeRootFile(sid, path, text, mode) {
+  const r = await krun(sid, ['bash', '--noprofile', '--norc', '-c',
+    'set -e; umask 077; printf "%s" "$2" > "$1.new"; chmod "$3" "$1.new"; mv -f "$1.new" "$1"', 'mcp-slicc', path, text, mode]);
+  if (r.status !== 0) throw new Error(`could not write ${path} in seven's kernel: ${(r.stderr || '').trim().slice(0, 200)}`);
+}
+
+async function secretCmd() {
+  const list = (v) => String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const name = opt('name', '');
+  const source = opt('source', '');
+  const header = String(opt('header', 'authorization')).toLowerCase();
+  const domains = list(opt('domains', '')).map((d) => d.toLowerCase().replace(/\.$/, ''));
+  const methods = list(opt('methods', '')).map((m) => m.toUpperCase());
+  const paths = list(opt('paths', ''));
+  const refuseUrl = opt('refuse-url', 'https://example.org/');
+  if (!SECRET_NAME.test(name)) fail(`--name must match ${SECRET_NAME}`);
+  if (!SECRET_SOURCE.test(source)) fail('--source must be jerk:<provider>@<device>');
+  if (!domains.length || !domains.every((d) => HOST_NAME.test(d))) fail('--domains must be one or more host names');
+  if (!/^[a-z0-9-]{1,64}$/.test(header)) fail('--header must be a header name');
+  if (!methods.every((m) => /^[A-Z]{3,7}$/.test(m))) fail('--methods must be HTTP methods');
+  if (!paths.every((p) => /^\/[A-Za-z0-9._~\/-]*$/.test(p))) fail('--paths must each start with /');
+  let value = '';
+  for await (const chunk of process.stdin) value += chunk;
+  value = value.replace(/\r?\n$/, '');
+  if (Buffer.byteLength(value) < 8 || /[\r\n\0]/.test(value)) fail('the value on stdin must be one line of at least 8 bytes');
+
+  await connectBrowser();
+  const sid = await sevenSession();
+  let found = [0, 0, ''];
+  while (Date.now() < deadline) {
+    const proto = await send('Runtime.evaluate', { expression: 'Object.prototype' }, sid);
+    const all = await send('Runtime.queryObjects', { prototypeObjectId: proto.result.objectId }, sid);
+    const r = await send('Runtime.callFunctionOn',
+      { objectId: all.objects.objectId, functionDeclaration: FIND_VAULT, returnByValue: true }, sid);
+    await send('Runtime.releaseObject', { objectId: all.objects.objectId }, sid).catch(() => {});
+    found = r.result.value;
+    if (found[0] > 0 && found[1] > 0) break;
+    await sleep(2000);
+  }
+  if (!(found[0] > 0 && found[1] > 0)) throw new Error("SLICC seven's kernel and vault were not found on its page");
+  if (found[2] !== 'enforce') throw new Error(`SLICC seven's kernel users are ${found[2]}, not enforce: its vault would take no rules`);
+
+  const sealed = await callOn(sid, `async function (name, source, value) {
+    try { const r = await this.vault.seal({ name, source, value }); return { placeholder: r.placeholder, state: r.state }; }
+    catch (e) { return { error: (e.code ? e.code + ': ' : '') + String(e.message || e).slice(0, 200) }; }
+  }`, [name, source, value]);
+  value = '';
+  if (sealed.error) throw new Error(`seven's vault did not seal ${name}: ${sealed.error}`);
+  if (!PLACEHOLDER.test(String(sealed.placeholder))) throw new Error(`seven's vault answered no placeholder for ${name}`);
+
+  const prev = await krun(sid, ['bash', '--noprofile', '--norc', '-c', 'cat -- "$1" 2>/dev/null || true', 'mcp-slicc', SPEC_FILE]);
+  let spec = {};
+  try { spec = JSON.parse(prev.stdout || '{}') || {}; } catch { spec = {}; }
+  spec[name] = { placeholder: sealed.placeholder, domains, header, methods, paths };
+  const files = secretFiles(spec);
+  await writeRootFile(sid, SPEC_FILE, JSON.stringify(spec), '600');
+  await writeRootFile(sid, FNOX_FILE, files.fnox, '644');
+  await writeRootFile(sid, POLICY_FILE, files.policy, '644');
+  await writeRootFile(sid, PROFILE_FILE, files.profile, '644');
+
+  const { createHash } = await import('node:crypto');
+  const want = { [FNOX_FILE]: createHash('sha256').update(files.fnox).digest('hex'),
+                 [POLICY_FILE]: createHash('sha256').update(files.policy).digest('hex') };
+  const accepted = (pol) => Object.entries(want).every(([p, h]) => pol.some((f) => f.path === p && f.sha256 === h && f.accepted === true));
+  let policy = [];
+  const until = Math.min(deadline, Date.now() + 30000);
+  while (Date.now() < until) {
+    const st = await callOn(sid, `async function () { return (await this.vault.call('status')).status.policy; }`);
+    policy = Array.isArray(st) ? st : [];
+    if (accepted(policy)) break;
+    const refused = policy.find((f) => want[f.path] === f.sha256 && f.accepted === false);
+    if (refused) throw new Error(`seven's vault refused ${refused.path}: ${(refused.warnings || []).join('; ').slice(0, 300)}`);
+    await sleep(500);
+  }
+  if (!accepted(policy)) throw new Error("seven's vault did not accept the job's policy files in 30 s");
+
+  const listed = await krun(sid, ['sealed', 'list', '--json']);
+  let record = null;
+  try { record = JSON.parse(listed.stdout).find((r) => r.name === name) || null; } catch { record = null; }
+  if (!record || record.placeholder !== sealed.placeholder || record.state !== 'active') {
+    throw new Error(`${name} is not active in seven's vault (${record ? record.state : 'not listed'})`);
+  }
+  const test = async (url) => {
+    const req = JSON.stringify({ v: 1, op: 'test', name, url, method: methods[0] || 'GET', header });
+    const r = await krun(sid, ['bash', '--noprofile', '--norc', '-c',
+      'exec 3<>/dev/sealed; printf "%s" "$1" >&3; head -c 4000 <&3', 'mcp-slicc', req]);
+    try { const v = JSON.parse(r.stdout); return { url, verdict: v.verdict, ...(v.cause ? { cause: v.cause } : {}) }; }
+    catch { return { url, verdict: 'unreadable' }; }
+  };
+  const inject = [];
+  for (const d of domains) inject.push(await test(`https://${d}${paths[0] || '/'}`));
+  const refuse = await test(refuseUrl);
+  await callOn(sid, 'function () { delete globalThis.__mcpSlicc; return true; }').catch(() => {});
+  if (!inject.every((t) => t.verdict === 'inject')) throw new Error(`seven's vault would not inject ${name}: ${JSON.stringify(inject)}`);
+  if (refuse.verdict !== 'refuse') throw new Error(`seven's vault would send ${name} to ${refuseUrl}`);
+  done({ ok: true, name, placeholder: sealed.placeholder, state: record.state, rules: record.rules,
+         tests: { inject, refuse } });
+}
+
+const COMMANDS = { seed: main, follow, policy: policyCmd, approvals: approvalsCmd, decide: decideCmd, secret: secretCmd };
 COMMANDS[cmd]().catch((e) => fail(String(e && e.message ? e.message : e).split('\n')[0]));

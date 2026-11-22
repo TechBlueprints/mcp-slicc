@@ -41,7 +41,7 @@ Python 3.9 or newer, standard library only, and Node.js for SLICC itself. macOS:
 | `start_slicc.sh` / `stop_slicc.sh` | start SLICC for one job (own Chrome profile, wiped; `--prompt`; local UI) and stop it and its Chrome. They touch only what mcp-slicc started. `servers` starts or stops just the endpoint and the UI |
 | `ui_server.py` | SLICC six: serves its bundled UI on `127.0.0.1:5711`, seeded to use the endpoint, telemetry off |
 | `start_seven.sh` | SLICC seven: launches, links and seeds seven for one job and sends the prompt (run by `start_slicc.sh`) |
-| `seven.mjs` | SLICC seven: sets the `local` account, the model and the approval policy on seven's page over CDP; for an attached job, follows your seven, sets its policy and lists and answers its approvals (Node 22+) |
+| `seven.mjs` | SLICC seven: sets the `local` account, the model and the approval policy on seven's page over CDP; for an attached job, follows your seven, sets its policy and lists and answers its approvals; seals a job's credential into seven's vault with its policy (`secret`, "Logins on seven"; its policy files in `seven_secret.mjs`) (Node 22+) |
 | `owner_watch.py` | SLICC seven: answers seven's owner-tier approvals with the change gate, through `slicc approvals` and `slicc decide`, or through mcp-slicc's follower in an attached job |
 | `attach_seven.sh` | SLICC seven, an attached job: runs mcp-slicc's follower for the length of the job, sets your seven's owner tier and puts it back |
 | `tests/` | 195 tests with a stand-in `claude` (`fake_claude.py`), a fake Spark (`test_qwen.py`), a fake upstream agent (`fake_upstream.py`), a stand-in `systemctl` and temporary folders: no login, no spend, no SLICC, no Spark |
@@ -218,6 +218,42 @@ Live on 2026-11-19 (seven in a person's own Chrome, extension 7.15.0, slicc-agen
 example.com; a gated `open` asked and allowed with `slicc_decide` (approvals `operator` for that job); a manual job
 whose write to `~/.pi/agent/settings.json` was refused and never reached seven; `slicc_stop` after the first step;
 each with the tier on during the job and `owner.tools` back to `off` after it, read again through a fresh follower.
+
+### Logins on seven
+
+For a deployment that holds a credential itself and wants one job to use it without seven's model, or the operator's,
+ever seeing it (2026-11-21; built for a household agent whose own vault holds the token). Launcher jobs on SLICC seven
+with host systemd and approval external only; `slicc_task` refuses `logins` anywhere else, and the MCP tool does not
+offer it.
+
+- **A job with logins.** `slicc_op.py task "<instruction>" --login SERVICE:token --login SERVICE:session` records
+  `logins` in the job and puts `SLICC_LOGINS="SERVICE:ROUTE,..."` in `run/slicc.env` for the unit. The deployment's own
+  launcher puts each credential in after seeding and before the prompt; mcp-slicc does not know where it comes from.
+- **A token: `seven.mjs secret`.** `node seven.mjs secret --cdp <url> --name NAME --source jerk:<provider>@<device>
+  --domains api.example.com [--methods GET] [--paths /a] < value` reads the value from stdin, hands it to bios's own
+  vault object on seven's page as a call argument (`vault.seal`, the page op bios uses for a linked device's lease) and
+  drops it. Then, as root in seven's kernel (bios's `kernel.run`), it writes the job's policy:
+  `/etc/fnox/config.toml` (the placeholder in `[secrets]`, a `[[proxy.rules]]` per domain),
+  `/etc/slicc/secrets-policy.toml` (`[exits] NAME = ["page"]`, `[reveal] agent = false`) and
+  `/etc/profile.d/mcp-slicc-secrets.sh` (`NAME=<placeholder>` for login shells). It waits until the vault accepts both
+  files and checks the vault's own verdicts (`/dev/sealed` `test`: inject on each domain, refuse on another host). The
+  vault takes rules only from those root-owned files, attested by the kernel under users `enforce`, so the agent cannot
+  widen them, and it scrubs the value from anything that comes back.
+- **Why not seven's own jerk.** Checked on seven with slicc-jerk 1.9.1 on 2026-11-21: from seven, a linked machine's CLI
+  provider answers `get` with "no token for … in seven's vault" and its `create` is refused over the link ("mints a
+  token without a sign-in page"); bios answers a kernel `jerk-seal` request with "signing in from seven arrives with a
+  later seven" (`src/seed/jerk.js`).
+- **A session.** The deployment moves a signed-in tab into the job's browser itself, for example with
+  `jerk tab export --cdp <its browser> | jerk tab import --cdp <the job's browser>`. mcp-slicc then tells the gate the
+  job is signed in (`classify_step` passes `session=True`), and the gate stops page JavaScript, cookie, storage and state
+  commands and every script that can drive the browser (`slicc_gate.json` `session_stop_commands`,
+  `session_browser_verbs`). A gate without the `session` argument stops every step of such a job.
+- **The gate on credentials, every job.** A placeholder (`fnox_proxy_` and 24 hex digits) in a command is not a secret.
+  `jerk`, `sealed`, `secret`, `fnox` and `oauth-*` may only read a placeholder or a list (`secret_read`); creating,
+  revealing, refreshing, rescoping, importing or exporting a credential, and `jerk tab`, are stopped.
+- **Seen live** (a throwaway seven on Linux, dummy values, 2026-11-21): the sealed value went out in the Authorization
+  header to its rule's host (CDP Network on seven's tab) and came back scrubbed to the placeholder; the same header to
+  another host got a 403 from seven and never left; a plain `bash -c` does not read `/etc/profile.d`, a login shell does.
 
 ## The tools
 

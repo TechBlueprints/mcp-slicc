@@ -612,6 +612,33 @@ def is_seven(job: Optional[dict]) -> bool:
     return bool(job) and str(job.get("slicc") or "6") == "7"
 
 
+# Logins (2026-11-21, README "Logins on seven"): a job a broker started with logins (slicc_op.py task --login
+# SERVICE:ROUTE), on host systemd and SLICC seven only. mcp-slicc records them and hands them to the unit
+# (SLICC_LOGINS in run/slicc.env); the deployment's own launcher puts each credential in before the job's prompt, and the
+# gate is told when the browser holds a signed-in session. route token: an API token in seven's vault (seven.mjs
+# secret). route session: a signed-in browser session moved into the job's browser.
+LOGIN_SERVICE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+LOGIN_ROUTES = ("token", "session")
+
+
+def parse_logins(values: Any) -> list:
+    """[{"service", "route"}] from SERVICE:ROUTE strings; ValueError for anything else."""
+    out = []
+    for v in values or []:
+        service, _, route = str(v).partition(":")
+        if not LOGIN_SERVICE.fullmatch(service) or route not in LOGIN_ROUTES:
+            raise ValueError(f"a login is SERVICE:token or SERVICE:session, not {str(v)[:80]!r}")
+        if any(x["service"] == service for x in out):
+            raise ValueError(f"{service} is named twice")
+        out.append({"service": service, "route": route})
+    return out
+
+
+def has_session(job: Optional[dict]) -> bool:
+    """True when the job's browser holds a signed-in session (a route session login)."""
+    return bool(job) and any(isinstance(x, dict) and x.get("route") == "session" for x in job.get("logins") or [])
+
+
 def step_tools(tools: Any) -> list:
     """The step tools a call offers, by mcp-slicc's (six's) names."""
     names = {SIX_NAMES.get(n, n) for n in tool_names(tools)}
@@ -726,14 +753,22 @@ def gate():
     return _gate
 
 
-def classify(tool: str, args: Any, seven: bool = False) -> dict:
+def classify(tool: str, args: Any, seven: bool = False, session: bool = False) -> dict:
     """{'decision': auto|ask|stop, 'reason', 'detail'}. Fails closed: a broken gate stops every step. A SLICC seven
-    step is judged by the gate's slicc7_classify, with seven's tool names; a gate without seven's rules stops it."""
+    step is judged by the gate's slicc7_classify, with seven's tool names; a gate without seven's rules stops it. In a
+    job whose browser holds a signed-in session (session, README "Logins on seven"), the gate is asked with
+    session=True, and a gate that does not take it stops the step."""
     try:
         g = gate()
         if seven:
             if not callable(getattr(g, "slicc7_classify", None)):
                 return {"decision": "stop", "reason": "the change gate has no rules for SLICC seven", "detail": tool}
+            if session:
+                try:
+                    return g.slicc7_classify(tool, args if isinstance(args, dict) else {}, session=True)
+                except TypeError:
+                    return {"decision": "stop", "reason": "the change gate has no rules for a signed-in job",
+                            "detail": tool}
             return g.slicc7_classify(tool, args if isinstance(args, dict) else {})
         return g.slicc_classify(tool, args if isinstance(args, dict) else {})
     except Exception as e:   # noqa: BLE001 - any failure is a stop
@@ -818,7 +853,7 @@ def classify_step(job: Optional[dict], tool: str, args: Any) -> dict:
     every tool call with the owner tier (job["owner_tier"], set once the launcher turned it on and owner_watch.py
     answers it), the script's nested calls are each judged by the gate there, so the script itself may run."""
     seven = is_seven(job)
-    v = classify(native_name(tool, seven), args, seven=seven)
+    v = classify(native_name(tool, seven), args, seven=seven, session=has_session(job))
     if (seven and tool == "codemode" and job and job.get("owner_tier") and v.get("decision") == "stop"
             and v.get("rule") == "stop_tools"):
         return {"decision": "auto", "reason": OWNER_TIER_CODEMODE, "detail": v.get("detail", "")}
@@ -872,7 +907,9 @@ def start_slicc(job: dict) -> str:
     if _host() == "systemd":
         units = _units()
         write_text(HOME / "run" / "slicc.job", job["id"] + "\n")
-        write_text(HOME / "run" / "slicc.env", f'SLICC_JOB={job["id"]}\nSLICC_PROMPT="{AUTO_PROMPT}"\n')
+        logins = ",".join(f'{x["service"]}:{x["route"]}' for x in job.get("logins") or [])
+        write_text(HOME / "run" / "slicc.env", f'SLICC_JOB={job["id"]}\nSLICC_PROMPT="{AUTO_PROMPT}"\n'
+                   + (f'SLICC_LOGINS="{logins}"\n' if logins else ""))
         try:
             r = _systemctl("restart", *units)
         except (OSError, subprocess.SubprocessError) as e:

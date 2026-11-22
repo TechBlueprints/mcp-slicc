@@ -206,14 +206,37 @@ def nav_urls(tokens) -> list:
 
 # ----------------------------------------------------------------------------------------- the verdicts
 
-def slicc_command(cmd, section: str = "slicc") -> dict:
+# A seven vault placeholder (fnox_proxy_ and 24 hex digits) is not a secret: the vault puts the value in only on its
+# rule's hosts, on the way out (2026-11-21, README "Logins on seven"). It is set aside before the secret check.
+PLACEHOLDER = re.compile(r"fnox_proxy_[0-9a-f]{24}")
+
+
+def _secret_read(seg: list, sp: dict) -> bool:
+    """True when a credential command only reads a placeholder or a list (slicc7 secret_read): `jerk list`,
+    `jerk <provider> get|list`, `sealed list|placeholder NAME`, `fnox get NAME`, `fnox list`, `secret list`, with no
+    flag but --json. Creating, revealing, refreshing, rescoping, importing or exporting a credential is never one."""
+    words = [t for t in seg if t != "--json"]
+    if any(t.startswith("-") for t in words[1:]):
+        return False
+    bad = set(sp.get("secret_read_not_names", []))
+    for pat in sp.get("secret_read", []):
+        if len(pat) == len(words) and all(
+                w == p if p != "*" else (w not in bad and bool(re.fullmatch(r"[A-Za-z0-9_:.-]{1,128}", w)))
+                for p, w in zip(pat, words)):
+            return True
+    return False
+
+
+def slicc_command(cmd, section: str = "slicc", session: bool = False) -> dict:
     """Verdict on one bash line SLICC's model wants to run: {decision: auto|ask|stop, reason, detail}. `section` is
-    the policy's rule set: slicc (six) or slicc7 (seven)."""
+    the policy's rule set: slicc (six) or slicc7 (seven). session (slicc7): the job's browser holds a signed-in session,
+    so the policy's session_stop_commands and every browser verb outside session_browser_verbs are stopped."""
     sp = _pol(section)
     detail = f"run in SLICC's shell: `{redact_text(cmd, 600)}`"
     if not isinstance(cmd, str) or not cmd.strip():
         return {"decision": "stop", "reason": "an empty command", "detail": detail}
-    if any(p.search(cmd) for p in REFUSED_SECRETS) or card_number(cmd):
+    bare = PLACEHOLDER.sub("<placeholder>", cmd)
+    if any(p.search(bare) for p in REFUSED_SECRETS) or card_number(bare):
         return {"decision": "stop", "reason": "the command carries what looks like a secret or a card number",
                 "detail": detail}
     never = set(sp.get("stop_commands", []))
@@ -230,9 +253,18 @@ def slicc_command(cmd, section: str = "slicc") -> dict:
         return {"decision": "ask", "reason": "the command writes, redirects or cannot be read plainly", "detail": detail}
     ro, browser = set(sp.get("readonly_commands", [])), set(sp.get("browser_commands", []))
     b_read, b_nav = set(sp.get("browser_read_verbs", [])), set(sp.get("browser_navigate_verbs", []))
+    secret_cmds = set(sp.get("secret_commands", []))
     asks = []
     for seg in segs:
         name = seg[0]
+        if name in secret_cmds or any(name.startswith(x) for x in sp.get("secret_command_prefixes", [])):
+            if _secret_read(seg, sp):
+                continue
+            return {"decision": "stop", "reason": f"`{name}` may only read a placeholder here; SLICC never creates, "
+                    f"reveals, refreshes, rescopes, imports or exports a credential", "detail": detail}
+        if session and name in set(sp.get("session_stop_commands", [])):
+            return {"decision": "stop", "reason": f"`{name}` can drive the browser or read its cookies, and this job's "
+                    "browser is signed in to an account: it is never run in a signed-in job", "detail": detail}
         if name in never:
             return {"decision": "stop", "reason": f"`{name}` is never run by SLICC ({sp.get('stop_reason', '')})",
                     "detail": detail}
@@ -240,6 +272,10 @@ def slicc_command(cmd, section: str = "slicc") -> dict:
             continue   # `<command> [verb] --help` prints usage and does nothing
         if name in browser or name == "open":
             verb = "open" if name == "open" else next((t for t in seg[1:] if not t.startswith("-")), "")
+            if session and verb not in set(sp.get("session_browser_verbs", [])):
+                return {"decision": "stop", "reason": f"`{name} {verb}`: page JavaScript and cookie, storage or state "
+                        "commands are never run in a signed-in job (the browser holds an account's session)",
+                        "detail": detail}
             if verb in b_read:
                 continue
             if verb in b_nav:
@@ -319,14 +355,15 @@ def slicc_classify(tool, args) -> dict:
             "detail": f"SLICC tool {tool}: {redact_text(json.dumps(args, ensure_ascii=False), 400)}"}
 
 
-def slicc7_classify(tool, args) -> dict:
+def slicc7_classify(tool, args, session: bool = False) -> dict:
     """Verdict on one tool call of SLICC seven (2026-11-18): pi's bash, read, write and edit on seven's kernel, and
     seven's own tools. Every tool without a rule is asked. codemode is stopped here (rule stop_tools); mcp-slicc lets
-    it run only where seven's owner tier files its nested calls for this gate one by one."""
+    it run only where seven's owner tier files its nested calls for this gate one by one. session: the job's browser
+    holds a signed-in session (2026-11-21, README "Logins on seven"); slicc_command stops more there."""
     sp = _pol("slicc7")
     args = args if isinstance(args, dict) else {}
     if tool == "bash":
-        return slicc_command(str(args.get("command") or args.get("cmd") or ""), "slicc7")
+        return slicc_command(str(args.get("command") or args.get("cmd") or ""), "slicc7", session=session)
     if tool in sp.get("internal_tools", []):
         return {"decision": "auto", "reason": "SLICC's own bookkeeping", "detail": f"SLICC tool {tool}"}
     if tool in sp.get("stop_tools", []):
