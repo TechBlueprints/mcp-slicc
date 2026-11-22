@@ -5,8 +5,11 @@ Each step gets a verdict: `auto` (it runs), `ask` (the approval setting decides,
 browser:
 
   * plainly read-only commands, and browser reads (`playwright-cli snapshot`, `tab-list` ...), run
+  * opening an http(s) page outside the local network runs (2026-11-21); a local address (loopback, private,
+    link-local, the policy's local_addresses), or a URL that names one, is asked; file:, javascript: and other schemes
+    never open
   * a short list of SLICC commands never runs: its cloud, devices, credentials, its own controls and memory
-  * everything else is asked: opening a page, `curl`, `node`, a click, a write outside the scratch space
+  * everything else is asked: `curl`, `node`, a click, a write outside the scratch space
   * reads in SLICC's workspace run; writes to its controls and memory files never happen; writes under the scratch
     paths run
 
@@ -26,10 +29,12 @@ offer:
 from __future__ import annotations
 
 import fnmatch
+import ipaddress
 import json
 import os
 import re
 import shlex
+import urllib.parse
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 POLICY_PATH = os.environ.get("CHANGE_GATE_POLICY", os.path.join(HERE, "slicc_gate.json"))
@@ -148,14 +153,55 @@ def _first_words(cmd) -> set:
     return set(re.findall(r"(?:^|[;&|(]\s*|\s)([A-Za-z][\w.+-]*)", cmd or ""))
 
 
+def host_is_local(host) -> bool:
+    """True for an address of the machine's own network: loopback, private, link-local, or a name the policy's
+    local_addresses lists (exact hosts, suffixes such as .local, and single-label names). A deployment adds its own
+    names there (CHANGE_GATE_POLICY)."""
+    lp = (POLICY or load_policy()).get("local_addresses") or {}
+    h = str(host or "").strip().strip("[]").lower().rstrip(".")
+    if not h:
+        return False
+    try:
+        ip = ipaddress.ip_address(h)
+        return any(ip in ipaddress.ip_network(n) for n in lp.get("networks", []))
+    except ValueError:
+        pass
+    if h in [str(x).lower() for x in lp.get("hosts", [])]:
+        return True
+    if any(h.endswith(str(s).lower()) for s in lp.get("host_suffixes", [])):
+        return True
+    return bool(lp.get("single_label")) and "." not in h and ":" not in h
+
+
 def url_kind(url) -> str:
-    """blank (about:blank), scheme (not http(s): file:, javascript:, data:, chrome: ...) or web."""
+    """blank (about:blank), scheme (not http(s): file:, javascript:, data:, chrome: ...), local (a local address,
+    host_is_local), leak (an outside URL that names a local address in its path, query or fragment) or web."""
     u = str(url or "").strip()
     if u == "about:blank":
         return "blank"
     if not re.match(r"(?i)^https?://", u) and re.match(r"(?i)^[a-z][a-z0-9+.-]*:(?!\d)", u):   # host:port is web
         return "scheme"
+    try:
+        sp = urllib.parse.urlsplit(u if re.match(r"(?i)^https?://", u) else "http://" + u)
+        host = sp.hostname or ""
+    except ValueError:
+        return "local"   # cannot be read: treated like a local address, so it is asked
+    if host_is_local(host):
+        return "local"
+    rest = urllib.parse.unquote_plus(f"{sp.path} {sp.query} {sp.fragment}")
+    for tok in re.findall(r"(?<![\w.-])(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
+                          r"(?:\.[A-Za-z0-9-]+)+)(?![\w-])", rest):
+        if host_is_local(tok.rstrip(".")):
+            return "leak"
     return "web"
+
+
+def nav_urls(tokens) -> list:
+    """The URLs in a browser step's arguments: every token that starts with a scheme (host:port counts), and a
+    scheme://... inside another token (`--url=https://...`), so no second URL rides along unchecked."""
+    urls = [t for t in tokens if re.match(r"(?i)^[a-z][a-z0-9+.-]*:", t)]
+    return urls + [m.group(0) for t in tokens if t not in urls
+                   for m in re.finditer(r"(?i)[a-z][a-z0-9+.-]*://[^\s'\"]+", t)]
 
 
 # ----------------------------------------------------------------------------------------- the verdicts
@@ -197,17 +243,21 @@ def slicc_command(cmd, section: str = "slicc") -> dict:
             if verb in b_read:
                 continue
             if verb in b_nav:
-                url = next((t for t in seg[1:] if re.match(r"(?i)^[a-z][a-z0-9+.-]*:", t)), "")
-                if not url:
+                # an http(s) page outside the local network opens by itself (2026-11-21); a local address, a URL
+                # that names one, and an open with no URL the gate can read are asked
+                urls = nav_urls(seg[1:])
+                if not urls:
                     asks.append(f"{name} {verb} (no URL the gate can read)")
                     continue
-                kind = url_kind(url)
-                if kind == "scheme":
-                    return {"decision": "stop", "reason": f"SLICC's browser only opens http(s) pages; "
-                            f"{redact_text(url, 120)} is not one", "detail": detail}
-                if kind == "blank":
-                    continue
-                asks.append(f"open {redact_text(url, 300)}")
+                for url in urls:
+                    kind = url_kind(url)
+                    if kind == "scheme":
+                        return {"decision": "stop", "reason": f"SLICC's browser only opens http(s) pages; "
+                                f"{redact_text(url, 120)} is not one", "detail": detail}
+                    if kind == "local":
+                        asks.append(f"open {redact_text(url, 300)} (a local address)")
+                    elif kind == "leak":
+                        asks.append(f"open {redact_text(url, 300)} (it names a local address)")
                 continue
             asks.append(f"{name} {verb}".strip())
             continue

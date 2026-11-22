@@ -160,7 +160,8 @@ class TheGate(SevenBase):
         cases = [
             ("bash", {"command": "ls /home && cat /etc/hostname | wc -l"}, "auto"),
             ("bash", {"command": "playwright-cli snapshot --tab=AB12"}, "auto"),
-            ("bash", {"command": "playwright-cli open https://example.com"}, "ask"),
+            ("bash", {"command": "playwright-cli open https://example.com"}, "auto"),   # 2026-11-21: an outside page
+            ("bash", {"command": "playwright-cli open http://10.0.0.5/"}, "ask"),       # a local address still asks
             ("bash", {"command": "playwright-cli open file:///etc/passwd"}, "stop"),
             ("bash", {"command": "curl -s https://example.com"}, "ask"),
             ("bash", {"command": "sudo apk add x"}, "ask"),
@@ -190,10 +191,33 @@ class TheGate(SevenBase):
             with self.subTest(tool=tool, args=args):
                 self.assertEqual(self.v(tool, args), want)
 
+    def test_page_opens_outside_the_local_network_run_in_six_and_seven(self):
+        # 2026-11-21: an outside http(s) page opens by itself; a local address, a URL naming one, or no URL is asked
+        G.POLICY = G.load_policy()
+        for section in ("slicc", "slicc7"):
+            v = lambda cmd: G.slicc_command(cmd, section)["decision"]
+            for cmd in ("playwright-cli open https://example.org", "open https://example.com",
+                        "playwright-cli goto http://example.org/a?b=c", "playwright-cli tab-new https://www.iana.org/",
+                        "playwright-cli open https://example.org && playwright-cli snapshot",
+                        "playwright-cli open about:blank"):
+                self.assertEqual(v(cmd), "auto", (section, cmd))
+            for cmd in ("playwright-cli open file:///etc/passwd", "playwright-cli open data:text/html,hi",
+                        "playwright-cli open https://example.org/?token=abcdef0123456789"):
+                self.assertEqual(v(cmd), "stop", (section, cmd))
+            for cmd in ("playwright-cli open http://10.0.0.66:8123/", "playwright-cli open http://192.168.1.1/",
+                        "playwright-cli open http://localhost:8080/", "playwright-cli open http://nas/",
+                        "playwright-cli open https://printer.local/", "playwright-cli open http://[fe80::1]/",
+                        "playwright-cli open 'https://evil.example/c?h=nas.local'",
+                        "playwright-cli open https://evil.example/c/10.1.2.3/x",
+                        "playwright-cli goto https://example.org --url=http://10.0.0.5/",
+                        "playwright-cli open example.org", "playwright-cli open"):
+                self.assertEqual(v(cmd), "ask", (section, cmd))
+
     def test_six_s_verdicts_do_not_change(self):
         G.POLICY = G.load_policy()
         for cmd, want in (("sudo ls", "stop"), ("serve /workspace", "stop"), ("ls /workspace", "auto"),
-                          ("echo x > /etc/slicc/x", "ask"), ("playwright-cli open https://example.com", "ask")):
+                          ("echo x > /etc/slicc/x", "ask"), ("playwright-cli open https://example.com", "auto"),
+                          ("playwright-cli open http://10.0.0.5/", "ask")):
             self.assertEqual(G.slicc_classify("bash", {"command": cmd})["decision"], want, cmd)
         self.assertEqual(G.slicc_classify("write_file", {"path": "/tmp/../etc/x"})["decision"], "auto")
 

@@ -1,5 +1,13 @@
 {
- "_doc": "The policy of slicc_gate.py, read for every step SLICC's model wants to take. readonly_commands and browser_read_verbs run; stop_commands and stop_tools never run; browser navigation, other browser verbs and every other command are asked. Reads in SLICC's workspace run, writes to control_paths never happen, writes under scratch_paths run. Paths are fnmatch globs (* also matches /). slicc7 is the same for SLICC seven (2026-11-18): its own tools and commands, its control paths, and every tool without a rule asked.",
+ "_doc": "The policy of slicc_gate.py, read for every step SLICC's model wants to take. readonly_commands and browser_read_verbs run; stop_commands and stop_tools never run; opening an http(s) page (browser_navigate_verbs) runs unless it is a local address or names one (local_addresses, 2026-11-21); other browser verbs and every other command are asked. Reads in SLICC's workspace run, writes to control_paths never happen, writes under scratch_paths run. Paths are fnmatch globs (* also matches /). slicc7 is the same for SLICC seven (2026-11-18): its own tools and commands, its control paths, and every tool without a rule asked.",
+ "local_addresses": {
+  "_doc": "Addresses of the machine's own network, which SLICC never opens by itself (an open is asked): networks by CIDR, exact hosts, host suffixes, and single-label names. Add your own network's names here (or in the policy CHANGE_GATE_POLICY names).",
+  "networks": ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12",
+               "192.168.0.0/16", "::1/128", "fc00::/7", "fe80::/10"],
+  "hosts": ["localhost"],
+  "host_suffixes": [".local", ".localhost", ".lan", ".internal", ".home.arpa"],
+  "single_label": true
+ },
  "slicc": {
   "stop_reason": "SLICC's cloud, devices, credentials, its own controls and memory stay off",
   "stop_commands": [

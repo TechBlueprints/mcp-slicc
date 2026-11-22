@@ -22,7 +22,8 @@ import common as C
 import endpoint as E
 import slicc_mcp as M
 
-OPEN = "playwright-cli open https://example.com"
+# a step the gate asks about (2026-11-21: opening an outside page no longer is one, so curl stands in)
+OPEN = "curl -s https://example.com"
 
 
 def user(text: str, when: str = "9:00 AM") -> dict:

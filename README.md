@@ -233,8 +233,8 @@ each with the tier on during the job and `owner.tools` back to `off` after it, r
 | `slicc_report` | manual job: end it with your report |
 
 Every step goes through the change gate first. `auto` steps run. `stop` steps are refused and never reach SLICC.
-`ask` steps are the ones the gate does not pass by itself: opening a page, `curl`, `node`, a write outside SLICC's
-scratch space. Who decides those is the approval setting.
+`ask` steps are the ones the gate does not pass by itself: opening a local address, `curl`, `node`, a click, a
+write outside SLICC's scratch space. Who decides those is the approval setting.
 
 ## The change gate
 
@@ -242,11 +242,16 @@ scratch space. Who decides those is the approval setting.
 
 - **Runs:** plainly read-only commands (`ls`, `cat`, `grep`, `jq` ... in a pipeline or list, with no redirect,
   substitution or here-doc), browser reads (`playwright-cli snapshot`, `screenshot`, `tab-list`), `--help`, opening
-  `about:blank`, reads in SLICC's workspace, and writes under `/tmp/` and `/workspace/jobs/`.
+  `about:blank` or an http(s) page outside the local network (since 2026-11-21: `open`, `goto`, `tab-new`,
+  `navigate`; every URL in the step is checked), reads in SLICC's workspace, and writes under `/tmp/` and
+  `/workspace/jobs/`.
 - **Never runs:** SLICC's own commands for its cloud, devices, credentials, controls and memory (`serve`, `mount`,
   `secret`, `sudo`, `npm`, `memory` and the rest of `stop_commands`), a command that carries something shaped like a
   secret or a card number, a page that is not http(s), and writes to SLICC's control and memory files.
-- **Asked:** everything else: opening a page, a click, a fill, `curl`, `node`, a write elsewhere.
+- **Asked:** everything else: opening a local address (loopback, private and link-local ranges, `localhost`, `.local`,
+  `.lan`, `.internal`, `.home.arpa`, single-label names: `local_addresses` in `slicc_gate.json`, where you add your own
+  network's names), an outside URL that names one in its path or query, an open with no URL the gate can read, a
+  click, a fill, `curl`, `node`, a write elsewhere.
 
 A broken or missing gate stops every step. The policy is read again when it changes on disk, so a rule change needs
 no restart. To use another gate, set `"gate"` in `~/.claude-slicc/config.json` (or `CLAUDE_SLICC_GATE`) to a Python

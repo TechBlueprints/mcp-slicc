@@ -155,7 +155,8 @@ class TabsOfTheJob(AttachBase):
         t2, step = self.in_thread(lambda: M.t_bash({"command": OPEN_SHOP, "purpose": "search the shop"}))
         th.join(10)
         call = box["r"]["tool_calls"][0]
-        self.assertEqual(self.rows(jid, "step")[-1]["approved_by"], "classifier")    # opening a page is gated
+        self.assertEqual(self.rows(jid, "step")[-1]["decision"], "auto")   # an outside page opens by itself (2026-11-21)
+        self.assertNotIn("approved_by", self.rows(jid, "step")[-1])
         self.assertEqual(self.rows(jid, "step")[-1]["purpose"], "search the shop")
         th3, _, _ = self.call_slicc(chat(line, *tool_round(call["id"], OPEN_SHOP, OPENED_SHOP)))
         t2.join(10)
